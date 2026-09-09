@@ -1,0 +1,455 @@
+/**
+ * Envato Comment Assistant - Injected Scoped Styles
+ */
+
+.eca-action-bar {
+  margin: 12px 0 16px 0;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  color: #1e293b;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.eca-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.eca-brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #4f46e5;
+  font-size: 12px;
+}
+
+.eca-dot {
+  width: 8px;
+  height: 8px;
+  background-color: #10b981;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.eca-draft-container {
+  margin-top: 10px;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 10px;
+}
+
+.eca-draft-box {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.eca-draft-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.eca-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.eca-chip-green { background: #dcfce7; color: #15803d; }
+.eca-chip-blue { background: #dbeafe; color: #1d4ed8; }
+.eca-chip-purple { background: #f3e8ff; color: #7e22ce; }
+.eca-chip-indigo { background: #e0e7ff; color: #4338ca; }
+.eca-chip-amber { background: #fef3c7; color: #b45309; }
+.eca-chip-red { background: #fee2e2; color: #b91c1c; }
+.eca-chip-gray { background: #f1f5f9; color: #475569; }
+.eca-chip-slate { background: #e2e8f0; color: #334155; }
+
+.eca-confidence {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.eca-status-pill {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.eca-status-needs_review { background: #fef3c7; color: #b45309; }
+.eca-status-approved { background: #dcfce7; color: #15803d; }
+.eca-status-inserted { background: #e0e7ff; color: #4338ca; }
+
+.eca-draft-content {
+  background: #fdfdfd;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1e293b;
+  white-space: pre-wrap;
+  min-height: 50px;
+  margin-bottom: 8px;
+  outline: none;
+}
+
+.eca-draft-content:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.eca-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #92400e;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.eca-warn-icon {
+  flex-shrink: 0;
+}
+
+.eca-draft-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.eca-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  border: 1px solid transparent;
+}
+
+.eca-btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.eca-btn-primary {
+  background-color: #4f46e5;
+  color: #ffffff;
+}
+
+.eca-btn-primary:hover {
+  background-color: #4338ca;
+}
+
+.eca-btn-success {
+  background-color: #10b981;
+  color: #ffffff;
+}
+
+.eca-btn-success:hover {
+  background-color: #059669;
+}
+
+.eca-btn-outline {
+  background-color: transparent;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.eca-btn-outline:hover {
+  background-color: #f1f5f9;
+  color: #1e293b;
+}
+
+.eca-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.eca-highlight-textarea {
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.4) !important;
+  border-color: #4f46e5 !important;
+  transition: box-shadow 0.3s ease;
+}
+
+/* Scoped Status Banners */
+.eca-status-banner {
+  margin: 12px 0 16px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
+  animation: ecaFadeIn 0.2s ease-in-out;
+}
+
+@keyframes ecaFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.eca-banner-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.eca-banner-icon {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.eca-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eca-banner-text strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.eca-banner-sub {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.eca-banner-close {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.eca-banner-close:hover {
+  opacity: 1;
+}
+
+/* Variants */
+.eca-status-active {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.eca-status-disabled {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+}
+
+.eca-status-warning {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
+/* ═══════════════════════════════════════════
+   ECA Query Assistant (Inquiry & Pre-Sale)
+   ═══════════════════════════════════════════ */
+
+.eca-query-box {
+  margin: 12px 0 14px 0;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #6366f1;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.eca-query-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.eca-dot-purple {
+  width: 8px;
+  height: 8px;
+  background-color: #8b5cf6;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+.eca-badge-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  margin-left: 4px;
+}
+
+.eca-query-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.eca-templates-tray {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.eca-tray-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+
+.eca-template-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.eca-template-chip {
+  background: #ffffff;
+  border: 1px solid #c7d2fe;
+  color: #3730a3;
+  padding: 4px 9px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.eca-template-chip:hover {
+  background: #e0e7ff;
+  border-color: #818cf8;
+  color: #1e1b4b;
+}
+
+.eca-query-draft-card {
+  margin-top: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.eca-query-draft-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.eca-query-hint {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.eca-tone-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.eca-tone-label {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.eca-tone-btn {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.eca-tone-btn:hover {
+  background: #e2e8f0;
+}
+
+.eca-tone-btn.active {
+  background: #6366f1;
+  border-color: #4f46e5;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.eca-query-draft-content {
+  background: #fafafa;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1e293b;
+  white-space: pre-wrap;
+  min-height: 60px;
+  margin-bottom: 10px;
+  outline: none;
+}
+
+.eca-query-draft-content:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.eca-query-draft-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+

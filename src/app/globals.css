@@ -2,26 +2,181 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
+  /* LIGHT THEME (DEFAULT) */
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    /* Main background: #F7F7F5 */
+    --background: 60 14.3% 96.5%;
+    /* Main text: #202124 */
+    --foreground: 225 5.9% 13.3%;
+
+    /* Card background: #FFFFFF */
+    --card: 0 0% 100%;
+    --card-foreground: 225 5.9% 13.3%;
+
+    /* Popover background: #FFFFFF */
+    --popover: 0 0% 100%;
+    --popover-foreground: 225 5.9% 13.3%;
+
+    /* Primary button: #202124, text: #FFFFFF */
+    --primary: 225 5.9% 13.3%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary background: #EFEFEC, text: #202124 */
+    --secondary: 60 8.1% 93.1%;
+    --secondary-foreground: 225 5.9% 13.3%;
+
+    /* Muted background: #EFEFEC, text: #6B6B66 */
+    --muted: 60 8.1% 93.1%;
+    --muted-foreground: 60 2.4% 41.0%;
+
+    --accent: 60 8.1% 93.1%;
+    --accent-foreground: 225 5.9% 13.3%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Border: #E5E5DF */
+    --border: 60 10.3% 88.6%;
+    /* Input background: #FFFFFF */
+    --input: 0 0% 100%;
+    --ring: 225 5.9% 13.3%;
+
+    --radius: 0.375rem;
+
+    /* Semantic status tokens */
+    --success: 142 71% 38%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --insight: 271 81% 64%;
+    --insight-foreground: 0 0% 100%;
+
+    --sidebar: 60 14.3% 96.5%;
+    --sidebar-foreground: 225 5.9% 13.3%;
+    --sidebar-border: 60 10.3% 88.6%;
+    --sidebar-active: 60 8.1% 93.1%;
+    --sidebar-active-foreground: 225 5.9% 13.3%;
+
+    /* Chart specific tokens */
+    --chart-grid: 60 10.3% 88.6%;
+    --chart-text: 60 2.4% 41.0%;
+    --chart-tooltip-bg: 0 0% 100%;
+    --chart-tooltip-border: 60 10.3% 88.6%;
+  }
+
+  /* DARK THEME */
+  .dark {
+    /* Main background: #171717 */
+    --background: 0 0% 9%;
+    /* Main text: #F5F5F0 */
+    --foreground: 60 14.3% 95.1%;
+
+    /* Card background: #202020 */
+    --card: 0 0% 12.5%;
+    --card-foreground: 60 14.3% 95.1%;
+
+    /* Popover background: #202020 */
+    --popover: 0 0% 12.5%;
+    --popover-foreground: 60 14.3% 95.1%;
+
+    /* Primary button: #F5F5F0, text: #171717 */
+    --primary: 60 14.3% 95.1%;
+    --primary-foreground: 0 0% 9%;
+
+    /* Secondary background: #2B2B2B, text: #F5F5F0 */
+    --secondary: 0 0% 16.9%;
+    --secondary-foreground: 60 14.3% 95.1%;
+
+    /* Muted background: #2B2B2B, text: #A3A3A0 */
+    --muted: 0 0% 16.9%;
+    --muted-foreground: 60 1.6% 63.3%;
+
+    --accent: 0 0% 16.9%;
+    --accent-foreground: 60 14.3% 95.1%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 60 14.3% 95.1%;
+
+    /* Border: #363636 */
+    --border: 0 0% 21.2%;
+    /* Input background: #242424 */
+    --input: 0 0% 14.1%;
+    --ring: 60 14.3% 95.1%;
+
+    /* Semantic status tokens */
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --insight: 271 81% 64%;
+    --insight-foreground: 0 0% 100%;
+
+    --sidebar: 0 0% 9%;
+    --sidebar-foreground: 60 14.3% 95.1%;
+    --sidebar-border: 0 0% 21.2%;
+    --sidebar-active: 0 0% 16.9%;
+    --sidebar-active-foreground: 60 14.3% 95.1%;
+
+    /* Chart specific tokens */
+    --chart-grid: 0 0% 21.2%;
+    --chart-text: 60 1.6% 63.3%;
+    --chart-tooltip-bg: 0 0% 12.5%;
+    --chart-tooltip-border: 0 0% 21.2%;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* Smooth subtle transition when switching themes */
+  body,
+  header,
+  nav,
+  main,
+  footer,
+  card,
+  input,
+  button,
+  table,
+  tr,
+  th,
+  td {
+    transition-property: background-color, border-color, color, fill, stroke;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 200ms;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+/* Dense, clean scrollbar adapting to theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
 }

@@ -1,0 +1,996 @@
+// SaaS Growth Agent — Complete Prisma Schema
+// 30 models covering auth, multi-tenancy, products, competitors, sources,
+// snapshots, pricing, features, reviews, comments, sentiment, changes,
+// analysis, recommendations, opportunities, leads, outreach, integrations,
+// jobs, notifications, and audit logs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════
+// 1. AUTH & MULTI-TENANCY
+// ═══════════════════════════════════════════
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String?
+  authProvider  String   @default("credentials")
+  role          String   @default("user") // "user" | "admin"
+  isActive      Boolean  @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenantUsers         TenantUser[]
+  ownedTenants        Tenant[]              @relation("TenantOwner")
+  notifications       Notification[]
+  outreachApprovals   OutreachDraft[]       @relation("ApprovedBy")
+  auditLogs           AuditLog[]
+  analyses            ComparisonAnalysis[]
+  salesSnapshots      EnvatoSalesSnapshot[]
+  opportunities       CompetitorOpportunity[]
+  activities          ProductActivityRecord[]
+  engagementExtensionTokens EngagementExtensionToken[]
+
+  @@map("users")
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  ownerId   String
+  owner     User     @relation("TenantOwner", fields: [ownerId], references: [id])
+  status    String   @default("active") // "active" | "suspended" | "cancelled"
+  plan      String   @default("starter")
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantUsers            TenantUser[]
+  saasProducts           SaaSProduct[]
+  competitors            Competitor[]
+  sources                Source[]
+  productSnapshots       ProductSnapshot[]
+  competitorSnapshots    CompetitorSnapshot[]
+  pricingPlans           PricingPlan[]
+  features               Feature[]
+  priceHistory           PriceHistory[]
+  reviews                Review[]
+  publicComments         PublicComment[]
+  sentimentAnalyses      SentimentAnalysis[]
+  changeEvents           ChangeEvent[]
+  productAnalyses        ProductAnalysis[]
+  recommendations        Recommendation[]
+  recommendationOutcomes RecommendationOutcome[]
+  customerOpportunities  CustomerOpportunity[]
+  leads                  Lead[]
+  outreachDrafts         OutreachDraft[]
+  outreachEvents         OutreachEvent[]
+  integrations           Integration[]
+  backgroundJobs         BackgroundJob[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  engagementThreads          EngagementThread[]
+  engagementReplyDrafts      EngagementReplyDraft[]
+  engagementReplyEvents      EngagementReplyEvent[]
+  engagementSettings         EngagementSettings?
+  engagementExtensionTokens  EngagementExtensionToken[]
+  ownEnvatoProducts          OwnEnvatoProduct[]
+
+  @@map("tenants")
+}
+
+model TenantUser {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      String   @default("member") // "owner" | "admin" | "member" | "viewer"
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([userId])
+  @@map("tenant_users")
+}
+
+// ═══════════════════════════════════════════
+// 2. SAAS PRODUCTS & COMPETITORS
+// ═══════════════════════════════════════════
+
+model SaaSProduct {
+  id             String   @id @default(cuid())
+  tenantId       String
+  name           String
+  websiteUrl     String
+  description    String?  @db.Text
+  targetAudience String?
+  status         String   @default("active")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sources         Source[]           @relation("ProductSources")
+  snapshots       ProductSnapshot[]
+  pricingPlans    PricingPlan[]      @relation("ProductPricing")
+  features        Feature[]          @relation("ProductFeatures")
+  priceHistory    PriceHistory[]     @relation("ProductPriceHistory")
+  analyses        ProductAnalysis[]
+  recommendations Recommendation[]
+  engagementThreads EngagementThread[]
+  ownEnvatoProducts OwnEnvatoProduct[]
+
+  @@index([tenantId])
+  @@map("saas_products")
+}
+
+model Competitor {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  websiteUrl  String
+  description String?  @db.Text
+  status      String   @default("active")
+  confirmed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sources        Source[]             @relation("CompetitorSources")
+  snapshots      CompetitorSnapshot[]
+  pricingPlans   PricingPlan[]        @relation("CompetitorPricing")
+  features       Feature[]            @relation("CompetitorFeatures")
+  priceHistory   PriceHistory[]       @relation("CompetitorPriceHistory")
+  reviews        Review[]
+  publicComments PublicComment[]
+  opportunities  CustomerOpportunity[]
+
+  @@index([tenantId])
+  @@map("competitors")
+}
+
+// ═══════════════════════════════════════════
+// 3. SOURCES & CONNECTORS
+// ═══════════════════════════════════════════
+
+model Source {
+  id                       String    @id @default(cuid())
+  tenantId                 String
+  url                      String
+  sourceType               String    // "website" | "pricing_page" | "feature_page" | "docs" | "changelog" | "review_site" | "community" | "rss" | "sitemap"
+  provider                 String?   // "g2" | "capterra" | "trustpilot" | "producthunt" | "reddit" | "custom"
+  accessMethod             String    @default("http") // "http" | "playwright" | "api" | "rss" | "sitemap"
+  permissionStatus         String    @default("pending") // "pending" | "permitted" | "restricted" | "blocked"
+  lastCollectedAt          DateTime?
+  collectionStatus         String    @default("pending") // "pending" | "collecting" | "success" | "failed" | "rate_limited"
+  monitoringFrequencyHours Int       @default(24)
+  metadata                 Json      @default("{}")
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product             SaaSProduct?        @relation("ProductSources", fields: [productId], references: [id])
+  productId           String?
+  competitor          Competitor?         @relation("CompetitorSources", fields: [competitorId], references: [id])
+  competitorId        String?
+  productSnapshots    ProductSnapshot[]
+  competitorSnapshots CompetitorSnapshot[]
+  reviews             Review[]
+  publicComments      PublicComment[]
+  opportunities       CustomerOpportunity[]
+
+  @@index([tenantId])
+  @@index([tenantId, sourceType])
+  @@map("sources")
+}
+
+// ═══════════════════════════════════════════
+// 4. SNAPSHOTS & HISTORICAL DATA
+// ═══════════════════════════════════════════
+
+model ProductSnapshot {
+  id             String   @id @default(cuid())
+  tenantId       String
+  productId      String
+  sourceId       String?
+  title          String?
+  headline       String?
+  description    String?  @db.Text
+  features       Json?
+  integrations   Json?
+  pricingSummary String?  @db.Text
+  targetAudience String?
+  useCases       Json?
+  testimonials   Json?
+  contentHash    String
+  rawContent     String?  @db.Text
+  capturedAt     DateTime @default(now())
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product SaaSProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  source  Source?     @relation(fields: [sourceId], references: [id])
+
+  @@index([tenantId, productId])
+  @@index([productId, capturedAt])
+  @@map("product_snapshots")
+}
+
+model CompetitorSnapshot {
+  id             String   @id @default(cuid())
+  tenantId       String
+  competitorId   String
+  sourceId       String?
+  title          String?
+  headline       String?
+  description    String?  @db.Text
+  features       Json?
+  integrations   Json?
+  pricingSummary String?  @db.Text
+  targetAudience String?
+  useCases       Json?
+  testimonials   Json?
+  contentHash    String
+  rawContent     String?  @db.Text
+  capturedAt     DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  source     Source?    @relation(fields: [sourceId], references: [id])
+
+  @@index([tenantId, competitorId])
+  @@index([competitorId, capturedAt])
+  @@map("competitor_snapshots")
+}
+
+// ═══════════════════════════════════════════
+// 5. PRICING, FEATURES & PRICE HISTORY
+// ═══════════════════════════════════════════
+
+model PricingPlan {
+  id             String   @id @default(cuid())
+  tenantId       String
+  productId      String?
+  competitorId   String?
+  planName       String
+  price          Decimal? @db.Decimal(10, 2)
+  billingPeriod  String?  // "monthly" | "yearly" | "one_time" | "custom"
+  currency       String   @default("USD")
+  features       Json?
+  trialAvailable Boolean  @default(false)
+  trialDays      Int?
+  isPopular      Boolean  @default(false)
+  capturedAt     DateTime @default(now())
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product    SaaSProduct? @relation("ProductPricing", fields: [productId], references: [id])
+  competitor Competitor?  @relation("CompetitorPricing", fields: [competitorId], references: [id])
+
+  @@index([tenantId])
+  @@index([productId])
+  @@index([competitorId])
+  @@map("pricing_plans")
+}
+
+model Feature {
+  id           String   @id @default(cuid())
+  tenantId     String
+  productId    String?
+  competitorId String?
+  name         String
+  description  String?  @db.Text
+  category     String?
+  sourceUrl    String?
+  capturedAt   DateTime @default(now())
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product    SaaSProduct? @relation("ProductFeatures", fields: [productId], references: [id])
+  competitor Competitor?  @relation("CompetitorFeatures", fields: [competitorId], references: [id])
+
+  @@index([tenantId])
+  @@index([productId])
+  @@index([competitorId])
+  @@map("features")
+}
+
+model PriceHistory {
+  id           String   @id @default(cuid())
+  tenantId     String
+  productId    String?
+  competitorId String?
+  planName     String
+  oldPrice     Decimal? @db.Decimal(10, 2)
+  newPrice     Decimal? @db.Decimal(10, 2)
+  currency     String   @default("USD")
+  detectedAt   DateTime @default(now())
+  sourceUrl    String?
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product    SaaSProduct? @relation("ProductPriceHistory", fields: [productId], references: [id])
+  competitor Competitor?  @relation("CompetitorPriceHistory", fields: [competitorId], references: [id])
+
+  @@index([tenantId])
+  @@index([detectedAt])
+  @@map("price_history")
+}
+
+// ═══════════════════════════════════════════
+// 6. REVIEWS & PUBLIC COMMENTS
+// ═══════════════════════════════════════════
+
+model Review {
+  id               String    @id @default(cuid())
+  tenantId         String
+  competitorId     String?
+  productId        String?
+  sourceId         String?
+  externalReviewId String?
+  reviewerName     String?
+  reviewText       String    @db.Text
+  rating           Decimal?  @db.Decimal(3, 1)
+  reviewDate       DateTime?
+  sourceUrl        String
+  collectedAt      DateTime  @default(now())
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  competitor        Competitor?         @relation(fields: [competitorId], references: [id])
+  source            Source?             @relation(fields: [sourceId], references: [id])
+  sentimentAnalysis SentimentAnalysis?
+
+  @@index([tenantId])
+  @@index([competitorId])
+  @@index([collectedAt])
+  @@map("reviews")
+}
+
+model PublicComment {
+  id               String    @id @default(cuid())
+  tenantId         String
+  competitorId     String?
+  sourceId         String?
+  commentText      String    @db.Text
+  sourceUrl        String
+  authorReference  String?
+  publishedAt      DateTime?
+  collectedAt      DateTime  @default(now())
+  permissionStatus String    @default("public") // "public" | "restricted" | "opted_in"
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  competitor        Competitor?         @relation(fields: [competitorId], references: [id])
+  source            Source?             @relation(fields: [sourceId], references: [id])
+  sentimentAnalysis SentimentAnalysis?
+  opportunities     CustomerOpportunity[]
+
+  @@index([tenantId])
+  @@index([competitorId])
+  @@index([collectedAt])
+  @@map("public_comments")
+}
+
+// ═══════════════════════════════════════════
+// 7. SENTIMENT ANALYSIS
+// ═══════════════════════════════════════════
+
+model SentimentAnalysis {
+  id                String   @id @default(cuid())
+  tenantId          String
+  reviewId          String?  @unique
+  commentId         String?  @unique
+  sentiment         String   // "positive" | "negative" | "neutral" | "mixed"
+  confidence        Decimal  @db.Decimal(3, 2)
+  complaintCategory String?  // "pricing" | "features" | "support" | "reliability" | "ux" | "integrations" | "performance" | "other"
+  topics            Json?
+  customerIntent    String?  // "seeking_alternative" | "requesting_feature" | "reporting_bug" | "general_complaint" | "asking_recommendation" | "considering_switching" | "other"
+  summary           String?  @db.Text
+  analyzedAt        DateTime @default(now())
+
+  tenant  Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  review  Review?        @relation(fields: [reviewId], references: [id])
+  comment PublicComment? @relation(fields: [commentId], references: [id])
+
+  @@index([tenantId])
+  @@index([sentiment])
+  @@index([customerIntent])
+  @@map("sentiment_analyses")
+}
+
+// ═══════════════════════════════════════════
+// 8. CHANGE DETECTION
+// ═══════════════════════════════════════════
+
+model ChangeEvent {
+  id            String   @id @default(cuid())
+  tenantId      String
+  ownerType     String   // "product" | "competitor"
+  ownerId       String
+  changeType    String   // "pricing" | "features" | "positioning" | "headline" | "description" | "integrations" | "trial" | "plans" | "availability" | "other"
+  previousValue String?  @db.Text
+  newValue      String?  @db.Text
+  importance    String   @default("medium") // "low" | "medium" | "high" | "critical"
+  sourceUrl     String?
+  detectedAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([ownerType, ownerId])
+  @@index([detectedAt])
+  @@index([importance])
+  @@map("change_events")
+}
+
+// ═══════════════════════════════════════════
+// 9. PRODUCT ANALYSIS
+// ═══════════════════════════════════════════
+
+model ProductAnalysis {
+  id                String   @id @default(cuid())
+  tenantId          String
+  productId         String
+  analysisDate      DateTime @default(now())
+  strengths         Json?
+  weaknesses        Json?
+  missingFeatures   Json?
+  positioningIssues Json?
+  pricingIssues     Json?
+  conversionIssues  Json?
+  opportunities     Json?
+  evidence          Json?
+  confidence        String   @default("medium")
+  summary           String?  @db.Text
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product SaaSProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([productId, analysisDate])
+  @@map("product_analyses")
+}
+
+// ═══════════════════════════════════════════
+// 10. RECOMMENDATIONS & OUTCOMES
+// ═══════════════════════════════════════════
+
+model Recommendation {
+  id              String    @id @default(cuid())
+  tenantId        String
+  productId       String
+  type            String    // "product_improvement" | "feature" | "pricing" | "positioning" | "landing_page" | "conversion" | "support" | "docs" | "marketing" | "competitor_response" | "retention" | "sales_pitch"
+  title           String
+  problem         String    @db.Text
+  evidence        Json?
+  sourceUrls      Json?
+  suggestedAction String    @db.Text
+  reason          String    @db.Text
+  priority        String    @default("medium") // "low" | "medium" | "high" | "critical"
+  confidence      String    @default("medium")
+  expectedImpact  String?   @db.Text
+  status          String    @default("pending") // "pending" | "accepted" | "rejected" | "postponed" | "in_progress" | "completed" | "successful" | "partially_successful" | "failed" | "inconclusive"
+  evaluationDate  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant   Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product  SaaSProduct             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  outcomes RecommendationOutcome[]
+
+  @@index([tenantId])
+  @@index([productId])
+  @@index([status])
+  @@index([priority])
+  @@map("recommendations")
+}
+
+model RecommendationOutcome {
+  id               String    @id @default(cuid())
+  tenantId         String
+  recommendationId String
+  actionTaken      String?   @db.Text
+  completedAt      DateTime?
+  evaluationDate   DateTime?
+  expectedResult   String?   @db.Text
+  actualResult     String?   @db.Text
+  outcome          String?   // "successful" | "partially_successful" | "failed" | "inconclusive" | "too_early"
+  notes            String?   @db.Text
+  measuredMetrics  Json?
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([recommendationId])
+  @@map("recommendation_outcomes")
+}
+
+// ═══════════════════════════════════════════
+// 11. OPPORTUNITIES, LEADS & OUTREACH
+// ═══════════════════════════════════════════
+
+model CustomerOpportunity {
+  id                        String   @id @default(cuid())
+  tenantId                  String
+  competitorId              String?
+  sourceId                  String?
+  publicCommentId           String?
+  complaintCategory         String?
+  customerIntent            String?
+  opportunityScore          Decimal  @db.Decimal(3, 2)
+  relevanceReason           String?  @db.Text
+  suggestedValueProposition String?  @db.Text
+  suggestedOffer            String?  @db.Text
+  status                    String   @default("detected") // "detected" | "needs_review" | "invalid" | "draft_created" | "awaiting_approval" | "approved" | "contacted" | "replied" | "interested" | "offer_sent" | "converted" | "not_interested" | "no_response" | "do_not_contact"
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  competitor    Competitor?    @relation(fields: [competitorId], references: [id])
+  source        Source?        @relation(fields: [sourceId], references: [id])
+  publicComment PublicComment? @relation(fields: [publicCommentId], references: [id])
+  leads         Lead[]
+  outreachDrafts OutreachDraft[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([opportunityScore])
+  @@map("customer_opportunities")
+}
+
+model Lead {
+  id            String   @id @default(cuid())
+  tenantId      String
+  opportunityId String
+  status        String   @default("new") // "new" | "qualified" | "contacted" | "interested" | "negotiating" | "converted" | "lost" | "archived"
+  ownerId       String?
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  opportunity    CustomerOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  outreachEvents OutreachEvent[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("leads")
+}
+
+model OutreachDraft {
+  id              String    @id @default(cuid())
+  tenantId        String
+  opportunityId   String
+  message         String    @db.Text
+  channel         String    // "public_reply" | "email" | "crm" | "messaging"
+  approvalStatus  String    @default("pending") // "pending" | "approved" | "rejected" | "needs_edit"
+  approvedById    String?
+  approvedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime  @default(now())
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  opportunity CustomerOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  approvedBy  User?               @relation("ApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([tenantId])
+  @@index([approvalStatus])
+  @@map("outreach_drafts")
+}
+
+model OutreachEvent {
+  id         String   @id @default(cuid())
+  tenantId   String
+  leadId     String
+  eventType  String   // "sent" | "delivered" | "opened" | "replied" | "bounced" | "opted_out"
+  channel    String
+  message    String?  @db.Text
+  response   String?  @db.Text
+  occurredAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([leadId])
+  @@map("outreach_events")
+}
+
+// ═══════════════════════════════════════════
+// 12. INTEGRATIONS, JOBS, NOTIFICATIONS & AUDIT
+// ═══════════════════════════════════════════
+
+model Integration {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  provider            String    // "stripe" | "google_analytics" | "shopify" | "woocommerce" | "hubspot" | "csv"
+  status              String    @default("inactive")
+  authorizationStatus String    @default("not_connected")
+  lastSyncAt          DateTime?
+  metadata            Json      @default("{}")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@map("integrations")
+}
+
+model BackgroundJob {
+  id                String    @id @default(cuid())
+  tenantId          String
+  type              String    // "collect_product_source" | "collect_competitor_source" | "analyze_product" | "analyze_competitor" | "monitor_price" | "monitor_features" | "monitor_reviews" | "monitor_comments" | "detect_changes" | "generate_recommendations" | "detect_customer_opportunities" | "generate_pitch_draft" | "send_notification" | "evaluate_recommendations" | "refresh_ai_index"
+  status            String    @default("queued") // "queued" | "processing" | "completed" | "failed" | "retrying" | "cancelled"
+  priority          Int       @default(5)
+  payload           Json      @default("{}")
+  result            Json?
+  errorMessage      String?   @db.Text
+  retryCount        Int       @default(0)
+  maxRetries        Int       @default(3)
+  relatedEntityType String?
+  relatedEntityId   String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+  @@map("background_jobs")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  type      String    // "change_detected" | "recommendation" | "opportunity" | "job_failed" | "approval_needed" | "outreach_reply" | "system"
+  title     String
+  message   String    @db.Text
+  actionUrl String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId])
+  @@index([readAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String?
+  action     String   // "create" | "update" | "delete" | "approve" | "reject" | "send" | "login" | "export"
+  entityType String
+  entityId   String?
+  metadata   Json     @default("{}")
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model ComparisonAnalysis {
+  id                String    @id @default(cuid())
+  userId            String?
+  user              User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectName       String?
+  myUrl             String
+  competitorUrl     String    // Primary/first competitor for backwards compatibility
+  competitorUrls    String[]  @default([])
+  status            String    @default("queued") // "queued" | "running" | "completed" | "failed"
+  errorMessage      String?   @db.Text
+  myProduct         Json?     // Extracted structured data for My SaaS
+  competitorProduct Json?     // Extracted structured data for primary competitor
+  competitorsData   Json?     // Array of extracted structured data for all competitors
+  comparison        Json?     // Comparison matrix & differences
+  recommendations   Json?     // Rule-based recommendations
+  seoAnalysis       Json?     // On-page SEO, target keywords, rankings, gaps
+  commentsAnalysis  Json?     // Public comments, sentiment, topics, complaints
+  opportunitiesData Json?     // Cached opportunities records
+  insights          Json?     // Synthesized cross-functional insights
+  collectionErrors  Json?     // Any collection issues per URL
+  lastActivityCheckAt DateTime?
+  nextActivityCheckAt DateTime?
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  opportunities     CompetitorOpportunity[]
+  activities        ProductActivityRecord[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("comparison_analyses")
+}
+
+model EnvatoSalesSnapshot {
+  id               String    @id @default(cuid())
+  userId           String?
+  user             User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceUrl        String
+  productName      String?
+  authorName       String?
+  totalSales       Int?
+  price            String?
+  discountedPrice  String?
+  rating           Float?
+  ratingCount      Int?
+  reviewCount      Int?
+  commentCount     Int?
+  publicationDate  String?
+  lastUpdateDate   String?
+  version          String?
+  category         String?
+  productStatus    String?
+  demoAvailable    Boolean?  @default(false)
+  docsAvailable    Boolean?  @default(false)
+  supportAvailable Boolean?  @default(false)
+  featuresCount    Int?      @default(0)
+  collectionStatus String    @default("success") // "success" | "partial" | "failed"
+  collectionError  String?   @db.Text
+  collectedAt      DateTime  @default(now())
+
+  @@index([userId])
+  @@index([sourceUrl, collectedAt])
+  @@index([collectedAt])
+  @@map("envato_sales_snapshots")
+}
+
+model CompetitorOpportunity {
+  id               String              @id @default(cuid())
+  analysisId       String
+  analysis         ComparisonAnalysis  @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  userId           String?
+  user             User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  competitorUrl    String
+  commentUrl       String?
+  commentDate      String?
+  issueCategory    String              // "installation", "documentation", "bugs", "missing_feature", "performance", "support", etc.
+  commentSummary   String              @db.Text
+  relevantFeature  String?
+  valueProposition String?             @db.Text
+  draftMessage     String?             @db.Text
+  status           String              @default("New") // "New" | "Needs review" | "Reviewed" | "Relevant" | "Not relevant" | "Message drafted" | "Contacted manually" | "Converted" | "Closed"
+  mentionCount     Int                 @default(1)
+  severity         String              @default("medium") // "low" | "medium" | "high" | "critical"
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([analysisId])
+  @@index([userId])
+  @@map("analysis_opportunities")
+}
+
+model SeoKeywordObservation {
+  id           String    @id @default(cuid())
+  analysisId   String?
+  userId       String?
+  keyword      String
+  productUrl   String
+  searchEngine String    @default("Google")
+  country      String?
+  device       String?   @default("desktop")
+  rankPosition Int?      // null if unranked or unavailable
+  status       String    @default("checked") // "checked" | "unavailable"
+  observedAt   DateTime  @default(now())
+
+  @@index([keyword, productUrl])
+  @@index([observedAt])
+  @@map("seo_keyword_observations")
+}
+
+model ProductActivityRecord {
+  id                   String              @id @default(cuid())
+  analysisId           String
+  analysis             ComparisonAnalysis  @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  userId               String?
+  user                 User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productUrl           String
+  productName          String
+  isOurProduct         Boolean             @default(false)
+  activityType         String              // "sales_increase" | "rating_changed" | "comments_count_changed" | "recurring_complaint_detected" | "price_changed" | "product_updated" | "feature_support_changed" | "collection_failed"
+  activityTitle        String
+  whatChanged          String              @db.Text
+  impactType           String              @default("neutral") // "positive" | "negative" | "neutral"
+  previousValue        String?
+  currentValue         String?
+  deltaValue           Int?
+  competitorComparison String?             @db.Text
+  possibleReasons      String?             @db.Text
+  recommendedActions   String?             @db.Text
+  snapshotTimestamp    DateTime            @default(now())
+  createdAt            DateTime            @default(now())
+
+  @@unique([analysisId, productUrl, activityType, currentValue, snapshotTimestamp])
+  @@index([analysisId, createdAt])
+  @@index([productUrl, createdAt])
+  @@map("product_activity_records")
+}
+
+// ═══════════════════════════════════════════
+// 15. ENGAGEMENT & EXTENSION ASSISTANT
+// ═══════════════════════════════════════════
+
+model EngagementThread {
+  id                String    @id @default(uuid())
+  tenantId          String
+  productId         String?
+  ownProductId      String?
+  platform          String    @default("envato")
+  productUrl        String
+  productName       String?
+  rootCommentId     String
+  commenterUsername String
+  commentUrl        String?
+  threadStatus      String    @default("open") // "open" | "needs_reply" | "replied" | "ignored" | "closed"
+  lastCommentAt     DateTime?
+  lastSyncedAt      DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product    SaaSProduct?              @relation(fields: [productId], references: [id], onDelete: SetNull)
+  ownProduct OwnEnvatoProduct?         @relation(fields: [ownProductId], references: [id], onDelete: SetNull)
+  messages EngagementThreadMessage[]
+  drafts   EngagementReplyDraft[]
+  events   EngagementReplyEvent[]
+
+  @@unique([tenantId, platform, productUrl, rootCommentId])
+  @@index([tenantId, threadStatus])
+  @@index([tenantId, productUrl])
+  @@map("engagement_threads")
+}
+
+model EngagementThreadMessage {
+  id                       String    @id @default(uuid())
+  threadId                 String
+  externalCommentId        String
+  parentExternalCommentId  String?
+  authorType               String    @default("customer") // "customer" | "seller" | "moderator"
+  authorUsername           String
+  messageText              String    @db.Text
+  messageUrl               String?
+  messageCreatedAt         DateTime?
+  rawMetadata              Json      @default("{}")
+  createdAt                DateTime  @default(now())
+
+  thread EngagementThread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  drafts EngagementReplyDraft[]
+
+  @@unique([threadId, externalCommentId])
+  @@index([threadId, createdAt])
+  @@map("engagement_thread_messages")
+}
+
+model EngagementReplyDraft {
+  id                  String    @id @default(uuid())
+  tenantId            String
+  threadId            String
+  targetMessageId     String
+  generatedReply      String    @db.Text
+  classification      String    // "appreciation" | "pre_sale_question" | "installation_issue" | "technical_issue" | "compatibility_question" | "feature_request" | "documentation_question" | "refund_request" | "support_request" | "follow_up" | "complaint" | "abusive_or_spam" | "other"
+  confidence          Decimal   @default(0.90) @db.Decimal(3, 2)
+  requiresHumanReview Boolean   @default(true)
+  reason              String?   @db.Text
+  status              String    @default("needs_review") // "draft" | "needs_review" | "approved" | "inserted" | "posted" | "rejected" | "failed"
+  rejectionReason     String?
+  approvedAt          DateTime?
+  insertedAt          DateTime?
+  postedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant        Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  thread        EngagementThread        @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  targetMessage EngagementThreadMessage @relation(fields: [targetMessageId], references: [id], onDelete: Cascade)
+  events        EngagementReplyEvent[]
+
+  @@index([tenantId, status])
+  @@index([threadId])
+  @@map("engagement_reply_drafts")
+}
+
+model EngagementReplyEvent {
+  id        String   @id @default(uuid())
+  tenantId  String
+  threadId  String
+  draftId   String?
+  eventType String   // "comment_detected" | "thread_synced" | "reply_generated" | "reply_approved" | "reply_rejected" | "reply_inserted" | "reply_posted" | "reply_failed" | "duplicate_prevented"
+  eventData Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  tenant Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  thread EngagementThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  draft  EngagementReplyDraft? @relation(fields: [draftId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, eventType])
+  @@index([threadId])
+  @@map("engagement_reply_events")
+}
+
+model EngagementSettings {
+  id                    String   @id @default(uuid())
+  tenantId              String   @unique
+  enabled               Boolean  @default(false)
+  globalPaused          Boolean  @default(false)
+  autoGenerate          Boolean  @default(true)
+  autoInsert            Boolean  @default(false)
+  autoPost              Boolean  @default(false)
+  dailyReplyLimit       Int      @default(20)
+  requireApprovalForAll Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("engagement_settings")
+}
+
+model EngagementExtensionToken {
+  id         String    @id @default(uuid())
+  tokenHash  String    @unique
+  tenantId   String
+  userId     String
+  name       String    @default("Chrome Extension")
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("engagement_extension_tokens")
+}
+
+model OwnEnvatoProduct {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  productId          String?
+  productUrl         String
+  productName        String
+  envatoItemId       String
+  authorUsername     String?
+  verificationStatus String    @default("pending") // "pending" | "verified" | "rejected"
+  verificationMethod String?   // "author_claim" | "envato_api" | "token_match"
+  verificationToken  String?
+  verifiedAt         DateTime?
+  enabled            Boolean   @default(true)
+  documentationUrl   String?
+  supportPolicy      String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product  SaaSProduct?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+  threads  EngagementThread[]
+
+  @@unique([tenantId, productUrl])
+  @@index([tenantId])
+  @@index([envatoItemId])
+  @@map("own_envato_products")
+}
+
+
