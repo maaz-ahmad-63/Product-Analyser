@@ -66,8 +66,8 @@ export function compareProducts(
 
     pricingDifferences.push({
       category: 'Starting Plan',
-      myProduct: myFirstPlan ? `${myFirstPlan.name} (${myFirstPlan.priceMonthly})` : 'Not found on website',
-      competitor: compFirstPlan ? `${compFirstPlan.name} (${compFirstPlan.priceMonthly})` : 'Not found on website',
+      myProduct: myFirstPlan ? `${myFirstPlan.name || 'Regular'} (${myFirstPlan.priceMonthly || (myFirstPlan as any).price || 'Not specified'})` : 'Not found on website',
+      competitor: compFirstPlan ? `${compFirstPlan.name || 'Regular'} (${compFirstPlan.priceMonthly || (compFirstPlan as any).price || 'Not specified'})` : 'Not found on website',
       difference: diffText,
     })
   } else {
@@ -261,7 +261,8 @@ export function compareProducts(
   }
 }
 
-function isSimilarText(a: string, b: string): boolean {
+function isSimilarText(a?: string, b?: string): boolean {
+  if (!a || !b) return false
   const cleanA = a.toLowerCase().replace(/[^a-z0-9]/g, ' ')
   const cleanB = b.toLowerCase().replace(/[^a-z0-9]/g, ' ')
 
@@ -280,12 +281,16 @@ function isSimilarText(a: string, b: string): boolean {
   return matches >= 2
 }
 
-function extractNumericPrice(plans: Array<{ priceMonthly: string }>): number | null {
-  if (!plans || plans.length === 0) return null
+function extractNumericPrice(plans: Array<{ priceMonthly?: string; price?: string; priceAnnual?: string }>): number | null {
+  if (!plans || !Array.isArray(plans) || plans.length === 0) return null
   for (const p of plans) {
-    const match = p.priceMonthly.match(/\$([0-9]+)/)
-    if (match) {
-      return parseInt(match[1], 10)
+    if (!p) continue
+    const priceStr = p.priceMonthly || (p as any).price || p.priceAnnual || ''
+    if (typeof priceStr === 'string') {
+      const match = priceStr.match(/\$([0-9]+)/)
+      if (match) {
+        return parseInt(match[1], 10)
+      }
     }
   }
   return null

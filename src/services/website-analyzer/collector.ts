@@ -72,6 +72,7 @@ interface StealthScraperOutput {
 }
 
 export function extractEnvatoItemId(url: string): string | null {
+  if (!url || typeof url !== 'string') return null
   const match = url.match(/[\/-](\d{7,10})(?:[/?#]|$)/) || url.match(/[?&]id=(\d{7,10})/)
   return match ? match[1] : null
 }
@@ -134,9 +135,9 @@ async function fetchEnvatoCatalogItem(itemId: string): Promise<StealthScraperOut
     const priceVal = priceCents ? `$${(priceCents / 100).toFixed(0)}` : 'One-time license'
     const pricingPlans: PricingPlanExtracted[] = [
       {
-        planName: 'Regular License',
-        price: priceVal,
-        billingCycle: 'one-time',
+        name: 'Regular License',
+        priceMonthly: `${priceVal} (One-time)`,
+        priceAnnual: `${priceVal} (One-time)`,
         features: ['Quality checked by Envato', 'Future updates included', '6 months author support'],
       },
     ]
