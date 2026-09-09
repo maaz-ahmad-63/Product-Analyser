@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio'
 import { execFile } from 'child_process'
 import path from 'path'
+import { prisma } from '@/lib/prisma'
 import { ExtractedProductData, PricingPlanExtracted, DiscoveredPage, EnvatoSalesData } from './types'
 
 const USER_AGENT =
@@ -68,6 +69,145 @@ interface StealthScraperOutput {
     rating: number | null
   }>
   error?: string
+}
+
+export function extractEnvatoItemId(url: string): string | null {
+  const match = url.match(/[\/-](\d{7,10})(?:[/?#]|$)/) || url.match(/[?&]id=(\d{7,10})/)
+  return match ? match[1] : null
+}
+
+async function fetchEnvatoCatalogItem(itemId: string): Promise<StealthScraperOutput | null> {
+  const token = process.env.ENVATO_API_TOKEN
+  if (!token) return null
+
+  try {
+    const res = await fetch(`https://api.envato.com/v3/market/catalog/item?id=${itemId}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': USER_AGENT,
+      },
+    })
+
+    if (!res.ok) {
+      console.warn(`Envato API returned HTTP ${res.status} for item ${itemId}`)
+      return null
+    }
+
+    const data = await res.json()
+    const descriptionHtml: string = data.description || ''
+    const $ = cheerio.load(descriptionHtml)
+
+    // Extract detailed features from list items, bullet points, and headers
+    const features: string[] = []
+    $('li').each((_, el) => {
+      const txt = $(el).text().trim().replace(/\s+/g, ' ')
+      if (txt.length >= 4 && txt.length <= 160 && !features.includes(txt)) {
+        features.push(txt)
+      }
+    })
+
+    if (features.length < 5) {
+      $('strong, b, h2, h3, h4').each((_, el) => {
+        const txt = $(el).text().trim().replace(/[:\-\.]*$/, '').replace(/\s+/g, ' ')
+        if (txt.length >= 6 && txt.length <= 80 && !features.includes(txt)) {
+          features.push(txt)
+        }
+      })
+    }
+
+    // Extract demo and documentation links
+    let demoLink: string | null = null
+    let docsLink: string | null = null
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href')?.trim()
+      const text = $(el).text().toLowerCase()
+      if (href && (text.includes('demo') || text.includes('preview') || href.includes('demo'))) {
+        if (!demoLink) demoLink = href
+      }
+      if (href && (text.includes('doc') || text.includes('guide') || text.includes('manual'))) {
+        if (!docsLink) docsLink = href
+      }
+    })
+
+    // Pricing extraction
+    const priceCents = data.price_cents
+    const priceVal = priceCents ? `$${(priceCents / 100).toFixed(0)}` : 'One-time license'
+    const pricingPlans: PricingPlanExtracted[] = [
+      {
+        planName: 'Regular License',
+        price: priceVal,
+        billingCycle: 'one-time',
+        features: ['Quality checked by Envato', 'Future updates included', '6 months author support'],
+      },
+    ]
+
+    // Detect common integrations & frameworks
+    const integrations: string[] = []
+    const combinedText = `${data.name} ${data.summary || ''} ${descriptionHtml}`.toLowerCase()
+    COMMON_INTEGRATIONS.forEach((intName) => {
+      if (combinedText.includes(intName.toLowerCase()) && !integrations.includes(intName)) {
+        integrations.push(intName)
+      }
+    })
+
+    const envatoSales: EnvatoSalesData = {
+      product_name: data.name,
+      product_url: data.url || `https://codecanyon.net/item/${itemId}`,
+      current_total_sales: data.number_of_sales ?? null,
+      product_price: priceVal,
+      discounted_price: null,
+      rating: data.rating ? parseFloat(Number(data.rating).toFixed(2)) : null,
+      rating_count: data.rating_count ?? null,
+      review_count: data.rating_count ?? null,
+      comment_count: null,
+      publication_date: data.published_at ? new Date(data.published_at).toISOString().split('T')[0] : null,
+      last_update_date: data.updated_at ? new Date(data.updated_at).toISOString().split('T')[0] : null,
+      version: null,
+      author_name: data.author_username || null,
+      category: data.classification || null,
+      product_status: 'active',
+      sales_data_unavailable: false,
+      thumbnail_url: data.previews?.icon_preview?.icon_url || data.previews?.live_site?.url || null,
+    }
+
+    const cleanDesc =
+      data.summary ||
+      $('p').first().text().trim() ||
+      `${data.name} published on ${data.site || 'Envato Market'}`
+
+    return {
+      success: true,
+      url: data.url || `https://codecanyon.net/item/${itemId}`,
+      finalUrl: data.url || `https://codecanyon.net/item/${itemId}`,
+      title: data.name,
+      h1: data.name,
+      description: cleanDesc,
+      productName: data.name,
+      priceText: priceVal,
+      pricingPlans,
+      features: features.slice(0, 35),
+      integrations,
+      tags: Array.isArray(data.tags) ? data.tags : [],
+      specs: {},
+      html: descriptionHtml,
+      isEnvato: true,
+      envatoSales,
+      thumbnailUrl: envatoSales.thumbnail_url,
+      headings: {
+        h1: [data.name],
+        h2: $('h2').map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8),
+        h3: $('h3').map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8),
+      },
+      imageAltsCount: $('img[alt]').length,
+      demoLink,
+      docsLink,
+      changelogLink: null,
+      comments: [],
+    }
+  } catch (err) {
+    console.error(`Error in fetchEnvatoCatalogItem for ${itemId}:`, err)
+    return null
+  }
 }
 
 async function runStealthScraper(url: string): Promise<StealthScraperOutput | null> {
@@ -152,12 +292,22 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     normalized.includes('themeforest.net') ||
     normalized.includes('envato.com')
 
-  // 1. Fetch Main Landing Page (Use stealth for protected domains or as fallback)
+  // 1. Fetch Main Landing Page (Use official Envato API for Envato items, or stealth/fetch)
   if (isProtectedDomain) {
-    stealthResult = await runStealthScraper(normalized)
-    if (stealthResult && stealthResult.html) {
-      mainHtml = stealthResult.html
-      finalUrl = stealthResult.finalUrl || normalized
+    const envatoItemId = extractEnvatoItemId(normalized)
+    if (envatoItemId) {
+      stealthResult = await fetchEnvatoCatalogItem(envatoItemId)
+      if (stealthResult && stealthResult.html) {
+        mainHtml = stealthResult.html
+        finalUrl = stealthResult.finalUrl || normalized
+      }
+    }
+    if (!mainHtml) {
+      stealthResult = await runStealthScraper(normalized)
+      if (stealthResult && stealthResult.html) {
+        mainHtml = stealthResult.html
+        finalUrl = stealthResult.finalUrl || normalized
+      }
     }
   }
 
@@ -554,7 +704,50 @@ export async function fetchProductPublicComments(url: string): Promise<Array<{
       return stealth.comments
     }
   } catch (err) {
-    console.error(`Error collecting public comments for ${url}:`, err)
+    console.error(`Error collecting public comments via scraper for ${url}:`, err)
   }
+
+  // Fallback: Query synced engagement threads from database for this item/URL
+  try {
+    const itemId = extractEnvatoItemId(url)
+    const threads = await prisma.engagementThread.findMany({
+      where: {
+        productUrl: itemId ? { contains: itemId } : { contains: url },
+      },
+      include: {
+        messages: true,
+      },
+      take: 50,
+    })
+
+    if (threads.length > 0) {
+      const dbComments: Array<{
+        author_name: string
+        comment_text: string
+        comment_date: string
+        comment_url: string | null
+        rating: number | null
+      }> = []
+
+      for (const t of threads) {
+        for (const m of t.messages) {
+          dbComments.push({
+            author_name: m.authorUsername,
+            comment_text: m.messageText,
+            comment_date: m.messageCreatedAt ? m.messageCreatedAt.toISOString() : m.createdAt.toISOString(),
+            comment_url: m.messageUrl || t.commentUrl || null,
+            rating: null,
+          })
+        }
+      }
+
+      if (dbComments.length > 0) {
+        return dbComments
+      }
+    }
+  } catch (dbErr) {
+    console.warn(`Could not query database for synced threads (${url}):`, dbErr)
+  }
+
   return []
 }
