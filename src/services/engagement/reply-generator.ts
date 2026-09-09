@@ -47,18 +47,27 @@ export class ReplyGeneratorService {
     latestMessage: string,
     customerUsername: string,
     threadHistory: ThreadMessageContext[],
-    product: ProductContext
+    product: ProductContext,
+    customAiConfig?: { apiKey?: string; model?: string; baseURL?: string }
   ): Promise<GeneratedReplyResult> {
-    const apiKey = process.env.OPENAI_API_KEY?.trim()
+    const apiKey = (customAiConfig?.apiKey || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '').trim()
 
-    if (apiKey) {
+    if (apiKey || process.env.AI_BASE_URL || customAiConfig?.baseURL) {
       try {
-        const aiResult = await this.callOpenAi(latestMessage, customerUsername, threadHistory, product, apiKey)
+        const aiResult = await this.callAiModel(
+          latestMessage,
+          customerUsername,
+          threadHistory,
+          product,
+          apiKey,
+          customAiConfig?.model,
+          customAiConfig?.baseURL
+        )
         if (aiResult) {
           return aiResult
         }
       } catch (err) {
-        console.error('OpenAI generation failed, falling back to deterministic engine:', err)
+        console.error('AI generation failed, falling back to deterministic engine:', err)
       }
     }
 
@@ -66,12 +75,14 @@ export class ReplyGeneratorService {
     return this.generateDeterministicReply(latestMessage, customerUsername, threadHistory, product)
   }
 
-  private async callOpenAi(
+  private async callAiModel(
     latestMessage: string,
     customerUsername: string,
     threadHistory: ThreadMessageContext[],
     product: ProductContext,
-    apiKey: string
+    apiKey: string,
+    overrideModel?: string,
+    overrideBaseUrl?: string
   ): Promise<GeneratedReplyResult | null> {
     const systemPrompt = `You are the official product author for "${product.productName}".
 Generate professional, courteous, and accurate customer support replies on the Envato Marketplace (CodeCanyon/ThemeForest).
@@ -109,14 +120,22 @@ Output strictly valid JSON with this schema:
 
     const userPrompt = `THREAD HISTORY:\n${historyFormatted || 'No previous messages in thread.'}\n\nLATEST CUSTOMER MESSAGE (@${customerUsername}):\n"${latestMessage}"`
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const model = overrideModel || process.env.AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini'
+    const rawBaseUrl = overrideBaseUrl || process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    const endpoint = `${rawBaseUrl.replace(/\/+$/, '')}/chat/completions`
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    }
+
+    const res = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
@@ -127,7 +146,8 @@ Output strictly valid JSON with this schema:
     })
 
     if (!res.ok) {
-      console.warn(`OpenAI API returned status ${res.status}`)
+      const errText = await res.text()
+      console.warn(`AI API returned status ${res.status} from ${endpoint}: ${errText}`)
       return null
     }
 
@@ -135,7 +155,12 @@ Output strictly valid JSON with this schema:
     const content = data.choices?.[0]?.message?.content
     if (!content) return null
 
-    const parsed = JSON.parse(content) as GeneratedReplyResult
+    let jsonString = content.trim()
+    if (jsonString.startsWith('```')) {
+      jsonString = jsonString.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    }
+
+    const parsed = JSON.parse(jsonString) as GeneratedReplyResult
     return {
       classification: parsed.classification || 'other',
       reply: parsed.reply?.trim() || '',

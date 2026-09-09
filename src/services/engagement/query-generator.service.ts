@@ -21,24 +21,25 @@ export class QueryGeneratorService {
     const productTitle = (input.productTitle || 'this item').trim()
     const tone = input.tone || 'courteous'
 
-    const apiKey = process.env.OPENAI_API_KEY?.trim()
-    if (apiKey && rawQuery.length > 3) {
+    const apiKey = (process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '').trim()
+    if ((apiKey || process.env.AI_BASE_URL) && rawQuery.length > 3) {
       try {
-        const aiResult = await this.callOpenAi(rawQuery, productTitle, tone, input.category)
+        const aiResult = await this.callAiModel(rawQuery, productTitle, tone, input.category, apiKey)
         if (aiResult) return aiResult
       } catch (err) {
-        console.error('OpenAI query enhancement failed, using deterministic builder:', err)
+        console.error('AI query enhancement failed, using deterministic builder:', err)
       }
     }
 
     return this.generateDeterministicQuery(rawQuery, productTitle, tone, input.category)
   }
 
-  private async callOpenAi(
+  private async callAiModel(
     userQuery: string,
     productTitle: string,
     tone: string,
-    category?: string
+    category?: string,
+    apiKey?: string
   ): Promise<DraftQueryResult | null> {
     const systemPrompt = `You are an expert technical pre-sale consultant helping a customer write a clear, polite, and effective comment/inquiry on Envato Market (CodeCanyon / ThemeForest).
 
@@ -55,14 +56,22 @@ Rules:
   "suggestions": ["Alternative question 1", "Alternative question 2"]
 }`
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const model = process.env.AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini'
+    const rawBaseUrl = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    const endpoint = `${rawBaseUrl.replace(/\/+$/, '')}/chat/completions`
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    }
+
+    const res = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
+      headers,
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: `Draft to polish: "${userQuery}"\nCategory: ${category || 'auto-detect'}` },
@@ -77,7 +86,12 @@ Rules:
     const content = data?.choices?.[0]?.message?.content
     if (!content) return null
 
-    const parsed = JSON.parse(content)
+    let jsonString = content.trim()
+    if (jsonString.startsWith('```')) {
+      jsonString = jsonString.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    }
+
+    const parsed = JSON.parse(jsonString)
     return {
       query: parsed.query,
       category: parsed.category || 'general',
