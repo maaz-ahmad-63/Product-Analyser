@@ -60,7 +60,7 @@ export class OwnProductsService {
 
     // Match localhost mock test page
     if (normalized.includes('test-envato-page.html')) {
-      return 'test-mock-taxido-59633641'
+      return '59633641'
     }
 
     // Fallback: SHA-256 slice
