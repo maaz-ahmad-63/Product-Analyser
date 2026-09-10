@@ -86,6 +86,13 @@ model Tenant {
   engagementExtensionTokens  EngagementExtensionToken[]
   ownEnvatoProducts          OwnEnvatoProduct[]
 
+  // Phase 0 bridge: legacy analyzer-path records optionally linked to a tenant.
+  comparisonAnalyses       ComparisonAnalysis[]
+  envatoSalesSnapshotsBridge EnvatoSalesSnapshot[] @relation("EnvatoSalesSnapshotsBridge")
+  competitorOpportunities  CompetitorOpportunity[]
+  seoKeywordObservations   SeoKeywordObservation[]
+  productActivityRecords   ProductActivityRecord[]
+
   @@map("tenants")
 }
 
@@ -718,8 +725,13 @@ model ComparisonAnalysis {
   opportunities     CompetitorOpportunity[]
   activities        ProductActivityRecord[]
 
+  // Phase 0: optional tenant bridge, backfilled from userId -> TenantUser. Nullable, non-breaking.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@index([userId])
   @@index([createdAt])
+  @@index([tenantId])
   @@map("comparison_analyses")
 }
 
@@ -750,9 +762,14 @@ model EnvatoSalesSnapshot {
   collectionError  String?   @db.Text
   collectedAt      DateTime  @default(now())
 
+  // Phase 0: optional tenant bridge, backfilled from userId -> TenantUser. Nullable, non-breaking.
+  tenantId String?
+  tenant   Tenant? @relation("EnvatoSalesSnapshotsBridge", fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@index([userId])
   @@index([sourceUrl, collectedAt])
   @@index([collectedAt])
+  @@index([tenantId])
   @@map("envato_sales_snapshots")
 }
 
@@ -776,8 +793,13 @@ model CompetitorOpportunity {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
+  // Phase 0: optional tenant bridge, backfilled from userId -> TenantUser. Nullable, non-breaking.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@index([analysisId])
   @@index([userId])
+  @@index([tenantId])
   @@map("analysis_opportunities")
 }
 
@@ -794,8 +816,13 @@ model SeoKeywordObservation {
   status       String    @default("checked") // "checked" | "unavailable"
   observedAt   DateTime  @default(now())
 
+  // Phase 0: optional tenant bridge, backfilled from userId -> TenantUser. Nullable, non-breaking.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@index([keyword, productUrl])
   @@index([observedAt])
+  @@index([tenantId])
   @@map("seo_keyword_observations")
 }
 
@@ -821,9 +848,14 @@ model ProductActivityRecord {
   snapshotTimestamp    DateTime            @default(now())
   createdAt            DateTime            @default(now())
 
+  // Phase 0: optional tenant bridge, backfilled from userId -> TenantUser. Nullable, non-breaking.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@unique([analysisId, productUrl, activityType, currentValue, snapshotTimestamp])
   @@index([analysisId, createdAt])
   @@index([productUrl, createdAt])
+  @@index([tenantId])
   @@map("product_activity_records")
 }
 
