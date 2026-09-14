@@ -50,6 +50,8 @@ export async function GET(req: Request) {
 
       return {
         id: a.id,
+        name: a.projectName || a.myProductName || a.myUrl,
+        projectName: a.projectName,
         status: a.status,
         myUrl: a.myUrl,
         competitorUrl: a.competitorUrl,

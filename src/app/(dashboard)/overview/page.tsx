@@ -1,343 +1,431 @@
 'use client'
 
-import { useTenant } from '@/context/tenant-provider'
+import React from 'react'
+import Link from 'next/link'
+import { useProject } from '@/context/project-provider'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import {
   Sparkles,
   Swords,
-  Activity,
   Target,
   ArrowRight,
-  ShieldAlert,
   Zap,
   CheckCircle2,
   ExternalLink,
-  ChevronRight,
-  Clock
+  Clock,
+  Building,
+  Star,
+  DollarSign,
+  TrendingUp,
+  AlertTriangle,
+  Layers,
+  MessageSquare,
+  ShieldCheck,
+  Share2,
+  Search,
+  Check,
+  Trophy,
+  HelpCircle,
 } from 'lucide-react'
-import Link from 'next/link'
-import { useState } from 'react'
+import { sanitizeFeatureList } from '@/services/website-analyzer/feature-analyzer'
+
+function formatPriceString(val: any): string {
+  if (!val) return 'Not available'
+  const str = String(val).trim()
+  if (/^(\$|₹|€|£|Rs\.?|¥)/i.test(str)) return str
+  return typeof val === 'number' ? `$${val}` : `$${str}`
+}
+
+function getProductPrice(prod?: any): string {
+  if (!prod) return 'Not available'
+  const ep = prod.envatoSales?.product_price || prod.envatoSales?.price
+  if (ep) return formatPriceString(ep)
+  const pp = prod.pricingPlans?.[0]
+  if (pp) {
+    const raw = pp.price || pp.pricePerMonth || pp.priceMonthly || pp.priceAnnual
+    if (raw) return formatPriceString(raw)
+  }
+  return 'Not available'
+}
+
+function getNumericPrice(prod?: any): number | null {
+  if (!prod) return null
+  const ep = prod.envatoSales?.product_price || prod.envatoSales?.price
+  if (ep) {
+    const n = parseFloat(String(ep).replace(/[^0-9.]/g, ''))
+    if (!isNaN(n)) return n
+  }
+  const pp = prod.pricingPlans?.[0]
+  if (pp) {
+    const raw = pp.price || pp.pricePerMonth || pp.priceMonthly || pp.priceAnnual
+    if (raw) {
+      const n = parseFloat(String(raw).replace(/[^0-9.]/g, ''))
+      if (!isNaN(n)) return n
+    }
+  }
+  return null
+}
+
+function getProductSales(prod?: any): string {
+  if (!prod) return 'Not available'
+  const s = prod.envatoSales?.current_total_sales ?? prod.envatoSales?.totalSales ?? prod.envatoSales?.total_sales
+  if (s !== null && s !== undefined && typeof s === 'number') {
+    return s.toLocaleString()
+  }
+  return 'Not available'
+}
+
+function getProductSalesNumber(prod?: any): number {
+  if (!prod) return 0
+  const s = prod.envatoSales?.current_total_sales ?? prod.envatoSales?.totalSales ?? prod.envatoSales?.total_sales
+  return typeof s === 'number' ? s : 0
+}
+
+function getProductRating(prod?: any): string {
+  if (!prod) return 'Not available'
+  const r = prod.envatoSales?.rating
+  if (r !== null && r !== undefined && typeof r === 'number') {
+    return r.toFixed(1)
+  }
+  return 'Not available'
+}
 
 export default function OverviewPage() {
-  const { currentTenantName } = useTenant()
-  const [selectedAngle, setSelectedAngle] = useState('all')
+  const { currentProjectId, currentProjectMeta, currentProjectData, isLoading, projects } = useProject()
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-24 text-muted-foreground text-sm">
+        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mr-3" />
+        Loading executive intelligence overview...
+      </div>
+    )
+  }
+
+  if (!currentProjectId || projects.length === 0) {
+    return (
+      <div className="text-center py-20 max-w-md mx-auto space-y-4">
+        <div className="p-4 rounded-full bg-primary/10 w-16 h-16 mx-auto flex items-center justify-center text-primary">
+          <Building className="h-8 w-8" />
+        </div>
+        <h2 className="text-xl font-bold text-foreground">No Workspace Analyses Found</h2>
+        <p className="text-xs text-muted-foreground">
+          Run your first competitive intelligence analysis to preview live pricing advantage, feature gaps, and switching opportunities.
+        </p>
+        <Link href="/analyses/new">
+          <Button className="gap-2 mt-2">
+            <Sparkles className="h-4 w-4" />
+            Run New Analysis
+          </Button>
+        </Link>
+      </div>
+    )
+  }
+
+  const projectName = currentProjectMeta?.name || 'Active Project'
+  const myProduct = currentProjectData?.my_product || {}
+  const competitors: any[] = currentProjectData?.competitors_data || []
+  const comparison = currentProjectData?.comparison || {}
+  const opportunities: any[] = currentProjectData?.opportunities || []
+  const commentsAnalysis = currentProjectData?.comments_analysis || {}
+  const executiveSummary = currentProjectMeta?.executiveSummary || null
+
+  const targetName = currentProjectMeta?.ownProduct?.name || myProduct.productName || myProduct.websiteTitle || projectName
+  const targetUrl = currentProjectMeta?.ownProduct?.url || myProduct.url || '#'
+
+  // Pricing calculations
+  const targetPriceNum = getNumericPrice(myProduct)
+  const competitorPrices = competitors
+    .map(getNumericPrice)
+    .filter((p): p is number => p !== null && p > 0)
+  
+  const avgCompetitorPrice = competitorPrices.length > 0
+    ? Math.round(competitorPrices.reduce((a, b) => a + b, 0) / competitorPrices.length)
+    : null
+
+  // Sales Leader
+  let salesLeader = competitors.length > 0 ? competitors[0] : null
+  let maxSales = -1
+  for (const comp of competitors) {
+    const sales = getProductSalesNumber(comp)
+    if (sales > maxSales) {
+      maxSales = sales
+      salesLeader = comp
+    }
+  }
+  const salesLeaderName = salesLeader ? (salesLeader.productName || salesLeader.websiteTitle || 'Top Competitor') : 'None'
+  const mySalesNum = getProductSalesNumber(myProduct)
+
+  // Feature stats
+  const myExclusive = comparison.myExclusiveFeatures || []
+  const competitorExclusive = comparison.competitorExclusiveFeatures || []
+  const readyOpportunities = opportunities.filter((o) => o.status === 'qualified' || (o.opportunityScore && o.opportunityScore >= 0.7))
+
+  // Ratings
+  const myRating = getProductRating(myProduct)
+  const competitorRatings = competitors
+    .map((c) => (c.envatoSales?.rating !== null && c.envatoSales?.rating !== undefined ? Number(c.envatoSales.rating) : null))
+    .filter((r): r is number => r !== null)
+  const avgRating = competitorRatings.length > 0
+    ? (competitorRatings.reduce((a, b) => a + b, 0) / competitorRatings.length).toFixed(1)
+    : null
+
+  // Question 1: What Changed / Current Standing
+  const standingSummary = competitors.length > 0
+    ? `Across your market (${competitors.length} competitor${competitors.length === 1 ? '' : 's'} tracked), your product is listed at ${getProductPrice(myProduct)} with ${getProductSales(myProduct)} sales. ${
+        maxSales > 0 ? `${salesLeaderName} holds category sales volume (${maxSales.toLocaleString()} sales), ` : ''
+      }while you maintain ${myExclusive.length} exclusive feature advantages.`
+    : `Single product scan active for ${targetName}. Add competitor URLs to calculate market averages and feature parity.`
+
+  // Question 2: Why Does It Matter?
+  const whyItMatters = targetPriceNum && avgCompetitorPrice
+    ? targetPriceNum < avgCompetitorPrice
+      ? `You hold a $${avgCompetitorPrice - targetPriceNum} price advantage over the competitor average ($${avgCompetitorPrice}). If you highlight total cost of ownership and your ${myExclusive.length} exclusive capabilities, you can convert budget-conscious buyers before they default to ${salesLeaderName}.`
+      : `Your product is priced at a premium above the competitor average ($${avgCompetitorPrice}). Buyers will compare feature-by-feature; you must justify this price through superior stability and exclusive features.`
+    : `Direct positioning prevents lost deals to incumbents who rely on brand longevity rather than feature quality.`
+
+  // Question 3: What Is My Biggest Advantage?
+  const biggestAdvantage = myExclusive.length > 0
+    ? `Exclusive Feature Moat (${myExclusive.length} unique capabilities rivals lack)`
+    : targetPriceNum && avgCompetitorPrice && targetPriceNum < avgCompetitorPrice
+      ? `Aggressive Pricing Wedge ($${avgCompetitorPrice - targetPriceNum} below market average)`
+      : `Clean, modern platform architecture`
+
+  const advantageDetail = myExclusive.length > 0
+    ? `Capabilities competitors do not offer: ${myExclusive.slice(0, 3).join(', ')}${myExclusive.length > 3 ? `, +${myExclusive.length - 3} more` : ''}.`
+    : `Price parity gives you runway to out-support incumbents.`
+
+  // Question 4: What Is My Biggest Weakness?
+  const biggestWeakness = competitorExclusive.length > 0
+    ? `Parity Gap (${competitorExclusive.length} competitor-exclusive capabilities)`
+    : mySalesNum < maxSales
+      ? `Category Sales Velocity (${salesLeaderName} has more historical review social proof)`
+      : `Market awareness and search footprint`
+
+  const weaknessDetail = competitorExclusive.length > 0
+    ? `Top competitor features buyers frequently ask for: ${competitorExclusive.slice(0, 3).join(', ')}${competitorExclusive.length > 3 ? `, +${competitorExclusive.length - 3} more` : ''}.`
+    : `Incumbents have collected more public reviews over several years.`
+
+  // Question 5: What Is the Biggest Competitor Threat?
+  const biggestThreat = salesLeaderName !== 'None'
+    ? `${salesLeaderName} Market Dominance`
+    : `Emerging low-cost clones`
+
+  const threatDetail = maxSales > 0
+    ? `${salesLeaderName} holds ${maxSales.toLocaleString()} sales and high category visibility, making them the default evaluation choice for new buyers.`
+    : `Competitors are actively iterating on feature parity.`
 
   return (
     <div className="space-y-8 animate-fade-in pb-12">
-      {/* Outmano-Style Hero Intelligence Banner */}
-      <div className="relative overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-b from-card/80 via-card/40 to-background p-6 md:p-8 shadow-2xl backdrop-blur-xl">
-        <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-primary/10 blur-3xl pointer-events-none" />
-        <div className="absolute right-40 -bottom-20 h-48 w-48 rounded-full bg-purple-500/10 blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <Badge variant="success" className="gap-1.5 py-1 px-3">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                Live Agent Active
-              </Badge>
-              <Badge variant="outline" className="text-xs text-muted-foreground">
-                <Clock className="h-3 w-3 mr-1" />
-                Checked 12m ago
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                Monitoring 3 competitors across 8 permitted public sources
-              </span>
-            </div>
-
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground pt-1">
-              Your Competitive Shape · {currentTenantName || 'Acme Analytics'}
-            </h1>
-            <p className="text-sm text-muted-foreground max-w-2xl">
-              Continuous intelligence that explains what moved, why it matters, and the exact next step for your product and sales team.
-            </p>
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-5">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-wider text-primary border-primary/40">
+              Executive Briefing
+            </Badge>
+            <Badge variant="secondary" className="text-[10px]">
+              {competitors.length} Competitors Tracked
+            </Badge>
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+              {projectName}
+            </Badge>
           </div>
-
-          <div className="flex items-center gap-3 shrink-0">
-            <Link href="/assistant">
-              <Button variant="outline" className="gap-2">
-                <Sparkles className="h-4 w-4 text-primary" />
-                Ask Intelligence Agent
-              </Button>
-            </Link>
-            <Link href="/opportunities">
-              <Button className="gap-2 shadow-lg shadow-primary/20">
-                <Target className="h-4 w-4" />
-                Sales Opportunities (3 Ready)
-              </Button>
-            </Link>
-          </div>
+          <h1 className="text-2xl md:text-3xl font-bold text-foreground tracking-tight flex items-center gap-2">
+            <Zap className="h-6 w-6 text-primary shrink-0" />
+            <span>Executive Command Center</span>
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            The 20-second executive summary: standing, advantages, vulnerabilities, threats, and next moves.
+          </p>
         </div>
 
-        <Separator className="my-6 bg-border/60" />
-
-        {/* Outmano "Competitive Shape" Key Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="rounded-xl border border-border/70 bg-background/50 p-4 transition-all hover:border-primary/40">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-              <span className="font-semibold uppercase tracking-wider">Pricing Advantage</span>
-              <Badge variant="warning" className="text-[10px]">Move Detected</Badge>
-            </div>
-            <div className="text-lg font-bold text-foreground">You Undercut by 28%</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Mixpanel raised Growth to $35/mo + retention limits. Your $99 flat tier has strong leverage.
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border/70 bg-background/50 p-4 transition-all hover:border-emerald-500/40">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-              <span className="font-semibold uppercase tracking-wider">Public Sentiment</span>
-              <Badge variant="success" className="text-[10px]">You Lead · 1st of 4</Badge>
-            </div>
-            <div className="text-lg font-bold text-emerald-400">92% Positive vs 71% Avg</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Competitor churn intent spiked due to unpredictable overage invoices this week.
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border/70 bg-background/50 p-4 transition-all hover:border-blue-500/40">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-              <span className="font-semibold uppercase tracking-wider">Customer Churn Pool</span>
-              <Badge variant="info" className="text-[10px]">8 Hot Leads</Badge>
-            </div>
-            <div className="text-lg font-bold text-foreground">3 Ready to Pitch</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Public dissatisfied users asking for alternatives with pre-drafted ethical pitches.
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border/70 bg-background/50 p-4 transition-all hover:border-purple-500/40">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-              <span className="font-semibold uppercase tracking-wider">Action Plan</span>
-              <Badge variant="purple" className="text-[10px]">Ranked Plan</Badge>
-            </div>
-            <div className="text-lg font-bold text-purple-400">2 High Priority Moves</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Next 30-min step: Add &ldquo;No Hidden Event Overage&rdquo; callout on pricing page.
-            </p>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {currentProjectMeta?.shareEnabled && currentProjectMeta?.shareToken && (
+            <Link href={`/report/${currentProjectMeta.shareToken}`} target="_blank">
+              <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+                <Share2 className="h-3.5 w-3.5" />
+                <span>Share Report</span>
+              </Button>
+            </Link>
+          )}
+          <Link href="/analyses/new">
+            <Button size="sm" className="gap-1.5 text-xs shadow-sm">
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Run New Analysis</span>
+            </Button>
+          </Link>
         </div>
       </div>
 
-      {/* Outmano-Style Intelligence Feed: "What moved, why it matters, what to do" */}
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2">
-              <Zap className="h-5 w-5 text-amber-400" />
-              Strategic Intelligence Feed
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              Specialized AI agents inspect every angle, discard noise, and summarize the move and the countermeasure.
-            </p>
+      {/* 20-SECOND EXECUTIVE ANSWER (The 6 Questions) */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs font-bold uppercase tracking-wider text-foreground">
+              Executive 20-Second Intelligence Summary
+            </span>
           </div>
-
-          <Tabs value={selectedAngle} onValueChange={setSelectedAngle} className="w-auto">
-            <TabsList>
-              <TabsTrigger value="all">All Moves</TabsTrigger>
-              <TabsTrigger value="pricing">Pricing</TabsTrigger>
-              <TabsTrigger value="positioning">Positioning</TabsTrigger>
-              <TabsTrigger value="features">Features</TabsTrigger>
-              <TabsTrigger value="reviews">Unhappy Users</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+            Autonomous Synthesis
+          </Badge>
         </div>
 
-        {/* Intelligence Cards with "The Move", "The Read", and "The Action" */}
-        <div className="space-y-4">
-          {/* Card 1: Mixpanel Pricing Squeeze */}
-          <Card className="border-border/80 bg-card/60 transition-all hover:border-border hover:shadow-lg">
-            <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 font-bold text-xs">
-                    M
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">Mixpanel</span>
-                      <Badge variant="warning" className="text-[10px]">Pricing & Limits</Badge>
-                      <span className="text-[11px] text-muted-foreground">• 4 hours ago</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[11px] gap-1 text-emerald-400 border-emerald-500/30">
-                    <CheckCircle2 className="h-3 w-3" />
-                    Receipts Verified
-                  </Badge>
-                  <a
-                    href="https://mixpanel.com/pricing"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  >
-                    Source <ExternalLink className="h-3 w-3" />
-                  </a>
-                </div>
-              </div>
-
-              <CardTitle className="text-base font-bold text-foreground pt-2">
-                Raised Growth Tier Base Price from $25 to $35/mo and capped retention history to 90 days
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Q1: What Is Happening? */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-2 border-b border-border/50">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-primary">
+                Question 1: What Is Happening?
+              </span>
+              <CardTitle className="text-sm font-bold text-foreground">
+                Current Market Standing
               </CardTitle>
             </CardHeader>
-
-            <CardContent className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg bg-background/50 p-3.5 border border-border/60">
-                <div>
-                  <span className="font-semibold text-foreground flex items-center gap-1.5 mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <Activity className="h-3.5 w-3.5 text-primary" />
-                    The Strategic Read
-                  </span>
-                  <p className="text-muted-foreground leading-relaxed">
-                    Mid-market squeeze. Mixpanel is pushing high-growth startups toward their enterprise contracts by restricting historical retention charts on entry tiers while simultaneously hiking entry base prices.
-                  </p>
-                </div>
-
-                <div className="border-t md:border-t-0 md:border-l border-border/60 pt-3 md:pt-0 md:pl-3.5">
-                  <span className="font-semibold text-emerald-400 flex items-center gap-1.5 mb-1 text-[11px] uppercase tracking-wider">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                    Recommended Move (30-min first step)
-                  </span>
-                  <p className="text-muted-foreground leading-relaxed">
-                    Update your pricing comparison table to explicitly call out: <strong className="text-foreground">&ldquo;Full 1-Year Retention History Included on All Plans — No Surge Invoices.&rdquo;</strong>
-                  </p>
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <Link href="/recommendations">
-                      <Button size="sm" variant="secondary" className="h-7 text-xs gap-1">
-                        Accept Recommendation <ArrowRight className="h-3 w-3" />
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Card 2: PostHog Feature Drop */}
-          <Card className="border-border/80 bg-card/60 transition-all hover:border-border hover:shadow-lg">
-            <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-xs">
-                    P
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">PostHog</span>
-                      <Badge variant="info" className="text-[10px]">Feature Release</Badge>
-                      <span className="text-[11px] text-muted-foreground">• Yesterday</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[11px] gap-1 text-emerald-400 border-emerald-500/30">
-                    <CheckCircle2 className="h-3 w-3" />
-                    Changelog Verified
-                  </Badge>
-                  <a
-                    href="https://posthog.com/changelog"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  >
-                    Source <ExternalLink className="h-3 w-3" />
-                  </a>
-                </div>
-              </div>
-
-              <CardTitle className="text-base font-bold text-foreground pt-2">
-                Launched Autonomous AI Session Replay Summaries
-              </CardTitle>
-            </CardHeader>
-
-            <CardContent className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg bg-background/50 p-3.5 border border-border/60">
-                <div>
-                  <span className="font-semibold text-foreground flex items-center gap-1.5 mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <Activity className="h-3.5 w-3.5 text-primary" />
-                    The Strategic Read
-                  </span>
-                  <p className="text-muted-foreground leading-relaxed">
-                    Attempting to capture qualitative user research budget. By synthesizing session recordings with LLM summaries, PostHog is positioning beyond pure metrics into UX diagnostics.
-                  </p>
-                </div>
-
-                <div className="border-t md:border-t-0 md:border-l border-border/60 pt-3 md:pt-0 md:pl-3.5">
-                  <span className="font-semibold text-emerald-400 flex items-center gap-1.5 mb-1 text-[11px] uppercase tracking-wider">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                    Recommended Move
-                  </span>
-                  <p className="text-muted-foreground leading-relaxed">
-                    Emphasize your core strength: speed and lightweight instrumentation. Add note in sales battlecard: &ldquo;PostHog script weight is 48KB+ vs Acme&apos;s 6KB script.&rdquo;
-                  </p>
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <Link href="/competitors">
-                      <Button size="sm" variant="secondary" className="h-7 text-xs gap-1">
-                        View Feature Gap Matrix <ArrowRight className="h-3 w-3" />
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Card 3: Hot Sales Opportunity from Dissatisfied Competitor Customer */}
-          <Card className="border-emerald-500/30 bg-card/60 transition-all hover:border-emerald-500/50 hover:shadow-lg">
-            <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 font-bold text-xs">
-                    <Target className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">Unhappy Competitor User · Sales Lead</span>
-                      <Badge variant="success" className="text-[10px]">Score: 0.94</Badge>
-                      <span className="text-[11px] text-muted-foreground">• 12 hours ago</span>
-                    </div>
-                  </div>
-                </div>
-
-                <Badge variant="outline" className="text-emerald-400 border-emerald-500/30">
-                  Ready for Manual Approval
+            <CardContent className="p-4 text-xs space-y-2">
+              <p className="text-foreground leading-relaxed">
+                {standingSummary}
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Badge variant="outline" className="text-[10px]">
+                  Price: {getProductPrice(myProduct)}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">
+                  Sales: {getProductSales(myProduct)}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">
+                  Rating: {myRating !== 'Not available' ? `${myRating} ★` : 'Unrated'}
                 </Badge>
               </div>
+            </CardContent>
+          </Card>
 
-              <CardTitle className="text-base font-bold text-foreground pt-2">
-                Public Complaint: &ldquo;Mixpanel just doubled our bill because of event spikes. Need flat-rate alternative.&rdquo;
+          {/* Q2: Why Does It Matter? */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-2 border-b border-border/50">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-blue-400">
+                Question 2: Why Does It Matter?
+              </span>
+              <CardTitle className="text-sm font-bold text-foreground">
+                Strategic Business Impact
               </CardTitle>
             </CardHeader>
+            <CardContent className="p-4 text-xs space-y-2">
+              <p className="text-muted-foreground leading-relaxed">
+                {whyItMatters}
+              </p>
+              <div className="pt-1 text-[11px] text-foreground font-medium">
+                Buyer Decision Driver: {targetPriceNum && avgCompetitorPrice && targetPriceNum < avgCompetitorPrice ? 'Value & ROI' : 'Quality & Exclusive Capabilities'}
+              </div>
+            </CardContent>
+          </Card>
 
-            <CardContent className="space-y-4 text-xs">
-              <div className="rounded-lg bg-background/60 p-3.5 border border-border/60">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-muted-foreground text-[11px] uppercase tracking-wider">
-                    Drafted Ethical Pitch (Awaiting Your Review)
+          {/* Q3: What Is My Biggest Advantage? */}
+          <Card className="border-emerald-500/30 bg-emerald-500/5">
+            <CardHeader className="pb-2 border-b border-emerald-500/20">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3" />
+                Question 3: What Is My Biggest Advantage?
+              </span>
+              <CardTitle className="text-sm font-bold text-foreground">
+                {biggestAdvantage}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 text-xs space-y-2">
+              <p className="text-muted-foreground leading-relaxed">
+                {advantageDetail}
+              </p>
+              <Link href="/dashboard/changes" className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:underline pt-1">
+                Explore in Feature Battle →
+              </Link>
+            </CardContent>
+          </Card>
+
+          {/* Q4: What Is My Biggest Weakness? */}
+          <Card className="border-amber-500/30 bg-amber-500/5">
+            <CardHeader className="pb-2 border-b border-amber-500/20">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" />
+                Question 4: What Is My Biggest Weakness?
+              </span>
+              <CardTitle className="text-sm font-bold text-foreground">
+                {biggestWeakness}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 text-xs space-y-2">
+              <p className="text-muted-foreground leading-relaxed">
+                {weaknessDetail}
+              </p>
+              <Link href="/dashboard/changes" className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400 hover:underline pt-1">
+                View Feature Gaps to Close →
+              </Link>
+            </CardContent>
+          </Card>
+
+          {/* Q5: What Is the Biggest Competitor Threat? */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-2 border-b border-border/50">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-purple-400 flex items-center gap-1">
+                <Swords className="h-3 w-3" />
+                Question 5: What Is the Biggest Threat?
+              </span>
+              <CardTitle className="text-sm font-bold text-foreground">
+                {biggestThreat}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 text-xs space-y-2">
+              <p className="text-muted-foreground leading-relaxed">
+                {threatDetail}
+              </p>
+              <Link href="/dashboard/competitors" className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline pt-1">
+                View Competitor Profile →
+              </Link>
+            </CardContent>
+          </Card>
+
+          {/* Q6: What Should I Do Next? (Top 3 Priorities) */}
+          <Card className="border-primary/40 bg-primary/5">
+            <CardHeader className="pb-2 border-b border-primary/20">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-primary flex items-center gap-1">
+                <Target className="h-3 w-3" />
+                Question 6: What Should I Do Next?
+              </span>
+              <CardTitle className="text-sm font-bold text-foreground">
+                Top 3 Execution Priorities
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 text-xs space-y-2.5">
+              <div className="flex items-start gap-2">
+                <span className="h-4 w-4 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                <div>
+                  <span className="font-semibold text-foreground">Close High-Impact Feature Gap: </span>
+                  <span className="text-muted-foreground">
+                    {competitorExclusive.length > 0 ? competitorExclusive[0] : 'Expand third-party automations'}
                   </span>
-                  <span className="text-[10px] text-muted-foreground">Channel: Public Discussion Reply</span>
                 </div>
-                <p className="text-foreground/90 italic bg-card/50 p-3 rounded border border-border/40 font-mono text-[11px]">
-                  &ldquo;Hey there — saw your frustration with spike billing. We built Acme Analytics specifically with flat monthly tiers ($99/mo with zero surge fees). Happy to extend a 30-day trial and help migrate your funnel tracking if you want to test it.&rdquo;
-                </p>
-                <div className="mt-3 flex items-center justify-between pt-2 border-t border-border/40">
-                  <span className="text-muted-foreground text-[11px]">
-                    Strict Anti-Spam Policy: Requires human click to approve before dispatch.
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="h-4 w-4 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                <div>
+                  <span className="font-semibold text-foreground">Sharpen Value Proposition: </span>
+                  <span className="text-muted-foreground">
+                    {targetPriceNum && avgCompetitorPrice && targetPriceNum < avgCompetitorPrice
+                      ? `Highlight your $${avgCompetitorPrice - targetPriceNum} price advantage on hero section`
+                      : 'Emphasize your exclusive features and dedicated support'}
                   </span>
-                  <div className="flex items-center gap-2">
-                    <Link href="/opportunities">
-                      <Button size="sm" className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-500 text-white">
-                        Review & Approve Pitch <ArrowRight className="h-3 w-3" />
-                      </Button>
-                    </Link>
-                  </div>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="h-4 w-4 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                <div>
+                  <span className="font-semibold text-foreground">Intercept Switching Buyers: </span>
+                  <span className="text-muted-foreground">
+                    Target {salesLeaderName} users frustrated with bugs or missing updates.
+                  </span>
                 </div>
               </div>
             </CardContent>
@@ -345,110 +433,210 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* Two-Column Section: Competitor Battlecards & Recent Monitoring Health */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Outmano-Style Sales Battlecard Quick Glance */}
-        <Card className="border-border/80 bg-card/50">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Swords className="h-4 w-4 text-primary" />
-                <CardTitle className="text-base">Sales Battlecard Quick-Reference</CardTitle>
-              </div>
-              <Link href="/competitors" className="text-xs text-primary hover:underline flex items-center gap-0.5">
-                All 3 rivals <ChevronRight className="h-3 w-3" />
-              </Link>
-            </div>
-            <CardDescription className="text-xs">
-              How to position against your top rivals when prospects mention them on calls.
-            </CardDescription>
-          </CardHeader>
+      {/* DEEP DIVE MODULE NAVIGATION (1-Click Access to the 7 Focused Modules) */}
+      <div className="space-y-4 pt-2">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
+            <Layers className="h-5 w-5 text-primary" />
+            <span>Dedicated Intelligence Modules</span>
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Each module is focused on answering one specific business question. Click any card for the full breakdown.
+          </p>
+        </div>
 
-          <CardContent className="space-y-3">
-            <div className="rounded-lg border border-border/60 bg-background/40 p-3">
-              <div className="flex items-center justify-between text-xs font-semibold mb-1">
-                <span className="text-foreground">When prospect mentions: Mixpanel</span>
-                <span className="text-emerald-400 font-normal">Win Rate: 68%</span>
-              </div>
-              <p className="text-xs text-muted-foreground mb-2">
-                <strong>Vulnerability:</strong> Surprise bill shocks and sudden account throttling when events exceed tier limits.
-              </p>
-              <div className="rounded bg-primary/10 p-2 text-[11px] text-primary">
-                <strong>The Talk-Track:</strong> &ldquo;They charge by data point volume; if you go viral, your bill goes viral. We charge flat rate with unlimited team members.&rdquo;
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-border/60 bg-background/40 p-3">
-              <div className="flex items-center justify-between text-xs font-semibold mb-1">
-                <span className="text-foreground">When prospect mentions: Amplitude</span>
-                <span className="text-emerald-400 font-normal">Win Rate: 61%</span>
-              </div>
-              <p className="text-xs text-muted-foreground mb-2">
-                <strong>Vulnerability:</strong> Extreme implementation complexity; non-technical teams struggle to build basic conversion funnels.
-              </p>
-              <div className="rounded bg-primary/10 p-2 text-[11px] text-primary">
-                <strong>The Talk-Track:</strong> &ldquo;Amplitude takes weeks of engineering to setup. Acme takes 5 minutes with our 1-line script or Segment destination.&rdquo;
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Intelligence Sources & Health (Permitted Public Data Only) */}
-        <Card className="border-border/80 bg-card/50">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldAlert className="h-4 w-4 text-emerald-400" />
-                <CardTitle className="text-base">Permitted Data Sources & Health</CardTitle>
-              </div>
-              <Link href="/jobs" className="text-xs text-primary hover:underline flex items-center gap-0.5">
-                Job queue <ChevronRight className="h-3 w-3" />
-              </Link>
-            </div>
-            <CardDescription className="text-xs">
-              All data collected via public sitemaps, open pricing pages, public changelogs, and approved review feeds.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="space-y-3 text-xs">
-            <div className="flex items-center justify-between p-2.5 rounded-lg bg-background/40 border border-border/60">
-              <div className="flex items-center gap-2.5">
-                <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                <div>
-                  <div className="font-semibold text-foreground">Mixpanel Public Pricing</div>
-                  <div className="text-[10px] text-muted-foreground">HTTP Connector · Robots.txt Compliant</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* 1. Sales & Pricing */}
+          <Link href="/dashboard/my-saas" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
+                    Sales & Pricing
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
                 </div>
-              </div>
-              <span className="text-[11px] text-emerald-400 font-medium">Healthy · 4h ago</span>
-            </div>
-
-            <div className="flex items-center justify-between p-2.5 rounded-lg bg-background/40 border border-border/60">
-              <div className="flex items-center gap-2.5">
-                <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                <div>
-                  <div className="font-semibold text-foreground">PostHog Public RSS Changelog</div>
-                  <div className="text-[10px] text-muted-foreground">RSS Feed Connector · Rate Limited</div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  How are products selling & priced?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Sales momentum, price position, and velocity benchmarks.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span>Target: {getProductPrice(myProduct)}</span>
+                  <span className="font-semibold text-foreground">{getProductSales(myProduct)} sales</span>
                 </div>
-              </div>
-              <span className="text-[11px] text-emerald-400 font-medium">Healthy · 14h ago</span>
-            </div>
+              </CardContent>
+            </Card>
+          </Link>
 
-            <div className="flex items-center justify-between p-2.5 rounded-lg bg-background/40 border border-border/60">
-              <div className="flex items-center gap-2.5">
-                <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                <div>
-                  <div className="font-semibold text-foreground">G2 Public Reviews Aggregator</div>
-                  <div className="text-[10px] text-muted-foreground">Public Discussion Connector</div>
+          {/* 2. Feature Battle */}
+          <Link href="/dashboard/changes" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30">
+                    Feature Battle
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-emerald-400 transition-colors" />
                 </div>
-              </div>
-              <span className="text-[11px] text-emerald-400 font-medium">Healthy · 8h ago</span>
-            </div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  Which product has the better features?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Parity analysis, capability matrix, and roadmap sprint priorities.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span className="text-emerald-400 font-semibold">{myExclusive.length} exclusive</span>
+                  <span className="text-amber-400 font-semibold">{competitorExclusive.length} gaps</span>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
 
-            <div className="rounded-lg bg-secondary/30 p-3 border border-border/40 text-[11px] text-muted-foreground">
-              <strong className="text-foreground">Compliance Guarantee:</strong> Zero private scraping, zero auth bypass, zero credential access. Complies with robots.txt and respectful crawl cadences.
-            </div>
-          </CardContent>
-        </Card>
+          {/* 3. Reviews & Ratings */}
+          <Link href="/dashboard/reviews" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-500/30">
+                    Reviews & Ratings
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-amber-400 transition-colors" />
+                </div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  What do customers like and dislike?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Star rating distribution, top praise, and dissatisfaction drivers.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span>Rating: {myRating !== 'Not available' ? `${myRating} ★` : 'Catalog verified'}</span>
+                  <span>Avg: {avgRating ? `${avgRating} ★` : '—'}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
+          {/* 4. Comments & Sentiment */}
+          <Link href="/dashboard/comments" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-purple-400 border-purple-500/30">
+                    Customer Comments
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-purple-400 transition-colors" />
+                </div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  What problems are customers talking about?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Recurring buyer complaints, unaddressed questions, and quotes.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span>Discussions: {commentsAnalysis.totalComments || 'Active'}</span>
+                  <span className="text-purple-400 font-semibold">Recurring issues tracked</span>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
+          {/* 5. Opportunities & Leads */}
+          <Link href="/dashboard/opportunities" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-blue-400 border-blue-500/30">
+                    Opportunities & Leads
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-blue-400 transition-colors" />
+                </div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  Where are the best sales opportunities?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Switching signals from competitor customers ready for outreach.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span>Total Leads: {opportunities.length}</span>
+                  <span className="text-blue-400 font-semibold">{readyOpportunities.length} ready to pitch</span>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
+          {/* 6. Competitors */}
+          <Link href="/dashboard/competitors" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-rose-400 border-rose-500/30">
+                    Competitor Tracking
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-rose-400 transition-colors" />
+                </div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  What are competitors doing?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Side-by-side telemetry, sales leader profiles, and add competitor tool.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span>{competitors.length} rivals monitored</span>
+                  <span className="text-foreground font-semibold">Leader: {salesLeaderName}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
+          {/* 7. Product Discoverability */}
+          <Link href="/dashboard/seo" className="group">
+            <Card className="border-border bg-card hover:border-primary/60 hover:shadow-md transition-all h-full flex flex-col justify-between">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <Badge variant="outline" className="text-[10px] text-cyan-400 border-cyan-500/30">
+                    Discoverability & SEO
+                  </Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-cyan-400 transition-colors" />
+                </div>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  How discoverable is my product?
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Listing health, keyword gaps against rivals, and copy optimizations.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
+                <div className="flex justify-between items-center">
+                  <span>Search Topics</span>
+                  <span className="text-cyan-400 font-semibold">Review listing keywords</span>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+        </div>
+      </div>
+
+      {/* Methodology Notice */}
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/60 pt-3">
+        <span className="flex items-center gap-1.5">
+          <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+          <span>ProductScope continuous market intelligence for active project &quot;{projectName}&quot;.</span>
+        </span>
+        <span>Public verified sources · No fabricated metrics</span>
       </div>
     </div>
   )

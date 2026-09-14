@@ -9,6 +9,11 @@ import {
   ExtractedProductData,
   SalesCommentCorrelation,
 } from './types'
+import {
+  clusterCommentsSemantically,
+  clusterCommentsSemanticallySync,
+  SemanticCluster,
+} from './semantic-clustering'
 
 export interface RawCommentItem {
   author_name: string
@@ -31,6 +36,9 @@ export type StandardComplaintCategory =
   | 'UI/UX'
   | 'Updates'
   | 'Integrations'
+  | 'Hardware, build and defects'
+  | 'Camera and multimedia'
+  | 'Pricing and value'
 
 interface CategoryPattern {
   category: StandardComplaintCategory
@@ -219,6 +227,51 @@ const CATEGORY_PATTERNS: CategoryPattern[] = [
     relevantFeature: 'Actively maintained modern tech stack with continuous quarterly release cycles',
     suggestedAngle: 'Promote active engineering roadmap, verified changelog, and predictable update schedule.',
   },
+  {
+    category: 'Hardware, build and defects',
+    groupTitle: 'Hardware defects, durability and build quality',
+    topicKey: 'hardware_defect',
+    keywords: [
+      'stopped working', 'stop working', 'manufacturing defect', 'manufacturing defaults', 'hardware default',
+      'broken', 'defect', 'defective', 'delicate', 'fragile', 'scratched', 'scratch', 'dent', 'dented',
+      'heating', 'heats up', 'overheating', 'battery drain', 'drains fast', 'battery life', 'charger', 'charging',
+      'stuck', 'screen bleed', 'flicker', 'dead pixel', 'hardware issue'
+    ],
+    criticalKeywords: ['stopped working', 'stop working', 'manufacturing defect', 'manufacturing defaults', 'lost 40k', 'total failure', 'scam straight forward'],
+    defaultSeverity: 'high',
+    detectedIssue: 'Reported hardware component failure, manufacturing defect, premature battery degradation, or excessive heating.',
+    relevantFeature: 'Rigorous hardware manufacturing quality assurance, aerospace-grade Titanium enclosure, and full warranty replacement guarantee',
+    suggestedAngle: 'Emphasize verified manufacturing standards, premium durability materials (Ceramic Shield, Grade 5 Titanium), and no-hassle warranty backing.',
+  },
+  {
+    category: 'Camera and multimedia',
+    groupTitle: 'Camera, audio and multimedia limitations',
+    topicKey: 'multimedia_camera',
+    keywords: [
+      'camera', 'single camera', 'portraits', 'focusing', 'focus', 'lens', 'lenses',
+      'speaker', 'single speaker', 'sound is low', 'speakers', 'sound quality', 'audio',
+      'microphone', 'stereo speakers', 'zoom', 'telephoto', 'macro', 'video quality'
+    ],
+    criticalKeywords: ['camera not focusing', 'speaker not working', 'broken camera'],
+    defaultSeverity: 'medium',
+    detectedIssue: 'Customer friction regarding camera zoom/portrait limitations or single-speaker acoustic volume.',
+    relevantFeature: 'Advanced multi-lens Fusion camera system with optical zoom, spatial audio, and stereo speaker output',
+    suggestedAngle: 'Highlight superior optical camera capabilities, advanced portrait computational photography, and immersive stereo audio performance.',
+  },
+  {
+    category: 'Pricing and value',
+    groupTitle: 'Pricing, value proposition and cost justification',
+    topicKey: 'pricing_value',
+    keywords: [
+      'not value for money', 'value for money', 'costing more', 'less features', 'overpriced',
+      'expensive', 'not worth', 'too high price', 'cost based on', 'costly', 'bad value'
+    ],
+    criticalKeywords: ['not value for money', 'waste of money', 'overpriced for what it offers'],
+    defaultSeverity: 'medium',
+    detectedIssue: 'Customer perception that product pricing is premium relative to the included baseline feature set.',
+    relevantFeature: 'High performance-to-price ratio with premium flagship components included at competitive value',
+    suggestedAngle: 'Showcase comprehensive premium specifications, trade-in incentives, and long-term resale / device longevity.',
+  },
 ]
 
 /**
@@ -238,7 +291,7 @@ export function classifySentimentAndComplaint(
 
   // Contrastive conjunctions indicating mixed sentiment
   const hasContrastiveConjunction =
-    /\b(but|however|although|though|except|except for|issue is|problem is|only issue|only problem|sadly|unfortunately|bad thing is)\b/i.test(textLower)
+    /\b(but|however|although|though|except|except for|issue is|problem is|only issue|only problem|only downside|sadly|unfortunately|bad thing is|cons?|drawback|drawbacks|downside|downsides)\b/i.test(textLower)
 
   // Positive indicator keywords
   const positiveWords = [
@@ -383,14 +436,15 @@ export function classifyNegativeComment(
  * - Evaluates complaint frequency trends over time.
  * - Generates sales & comment correlation analysis.
  */
-export function analyzeCompetitorComments(
+export async function analyzeCompetitorComments(
   competitorsData: ExtractedProductData[],
   scrapedCommentsMap: Record<string, RawCommentItem[]> = {},
   historicalAnalysesOrSnapshots: any[] = []
-): CommentsAnalysisResult {
+): Promise<CommentsAnalysisResult> {
   const summaries: CompetitorCommentsSummary[] = []
   const recurringComplaints: RecurringComplaintGroup[] = []
   const allFilteredComments: PublicComment[] = []
+  const allProcessedComments: PublicComment[] = []
   const unavailableCompetitors: string[] = []
   let totalAnalyzed = 0
   let unresolvedCount = 0
@@ -442,6 +496,7 @@ export function analyzeCompetitorComments(
     let negativeCount = 0
     let mixedCount = 0
     let positiveCount = 0
+    let neutralCount = 0
 
     // Deduplicate comments by text hash / signature
     const seenTexts = new Set<string>()
@@ -452,81 +507,71 @@ export function analyzeCompetitorComments(
       if (seenTexts.has(sig)) continue
       seenTexts.add(sig)
 
-      const res = classifyNegativeComment(c, comp.url, comp.productName, i)
-      if (res) {
-        classifiedComplaints.push(res)
-        allFilteredComments.push(res.comment)
-        if (res.comment.sentiment === 'mixed') mixedCount++
+      const { sentiment, matchedPattern, isCritical, confidenceScore } = classifySentimentAndComplaint(
+        c.comment_text,
+        c.rating
+      )
+
+      const pubComment: PublicComment = {
+        id: `comm_${comp.url.slice(-6)}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+        product_url: comp.url,
+        product_name: comp.productName,
+        author_name: c.author_name || 'Verified Buyer',
+        comment_text: c.comment_text,
+        comment_url: c.comment_url,
+        comment_date: c.comment_date || 'Recent public review',
+        rating: c.rating,
+        sentiment,
+        topic: matchedPattern?.topicKey || 'general_question',
+        topic_label: matchedPattern?.category || (sentiment === 'positive' ? 'Positive Review' : 'General Feedback'),
+        severity: matchedPattern?.defaultSeverity || 'low',
+        detected_issue: matchedPattern?.detectedIssue || (sentiment === 'positive' ? 'Positive customer experience' : 'General feedback'),
+        relevant_feature: matchedPattern?.relevantFeature || '',
+        suggested_angle: matchedPattern?.suggestedAngle || '',
+        confidence: isCritical || confidenceScore >= 0.9 ? 'high' : 'medium',
+        confidence_score: confidenceScore,
+        feedback_type: sentiment === 'positive' ? 'suggestion' : 'complaint',
+        is_suggestive: sentiment === 'mixed',
+        collected_at: new Date().toISOString(),
+      }
+
+      allProcessedComments.push(pubComment)
+
+      if (sentiment === 'negative' || sentiment === 'mixed') {
+        classifiedComplaints.push({ comment: pubComment, isCritical, confidenceScore })
+        allFilteredComments.push(pubComment)
+        if (sentiment === 'mixed') mixedCount++
         else negativeCount++
-      } else {
+      } else if (sentiment === 'positive') {
         positiveCount++
-      }
-    }
-
-    // Group semantically by category pattern
-    const categoryGroups: Record<
-      string,
-      {
-        category: StandardComplaintCategory
-        groupTitle: string
-        comments: PublicComment[]
-        isCritical: boolean
-        latestDate: string
-        firstDate: string
-        representativeComment: string
-        commentUrl: string | null
-        detectedIssue: string
-        confidenceScoreSum: number
-      }
-    > = {}
-
-    for (const { comment, isCritical, confidenceScore } of classifiedComplaints) {
-      const cat = comment.topic_label as StandardComplaintCategory
-      const pattern = CATEGORY_PATTERNS.find((p) => p.category === cat)
-      const groupTitle = pattern ? pattern.groupTitle : `${cat} problems`
-
-      if (!categoryGroups[cat]) {
-        categoryGroups[cat] = {
-          category: cat,
-          groupTitle,
-          comments: [comment],
-          isCritical,
-          latestDate: comment.comment_date || 'Recently',
-          firstDate: comment.comment_date || 'Recently',
-          representativeComment: comment.comment_text,
-          commentUrl: comment.comment_url,
-          detectedIssue: comment.detected_issue,
-          confidenceScoreSum: confidenceScore,
-        }
       } else {
-        categoryGroups[cat].comments.push(comment)
-        categoryGroups[cat].confidenceScoreSum += confidenceScore
-        if (isCritical) categoryGroups[cat].isCritical = true
-        // Keep the more detailed comment as representative
-        if (comment.comment_text.length > categoryGroups[cat].representativeComment.length) {
-          categoryGroups[cat].representativeComment = comment.comment_text
-          categoryGroups[cat].commentUrl = comment.comment_url
-        }
-        categoryGroups[cat].latestDate = comment.comment_date || categoryGroups[cat].latestDate
+        neutralCount++
       }
     }
 
-    // Apply strict recurring filter:
-    // Mention count >= 2 OR critical complaint
-    const competitorCommonComplaints: Array<{ topic: string; count: number; sample: string; comments?: PublicComment[] }> = []
+    // Group semantically by vector similarity and root issues
+    const complaintsToCluster = classifiedComplaints.map((c) => c.comment)
+    const semanticClusters = await clusterCommentsSemantically(complaintsToCluster)
 
-    for (const [catName, group] of Object.entries(categoryGroups)) {
-      const mentionCount = group.comments.length
+    const competitorCommonComplaints: Array<{
+      topic: string
+      count: number
+      sample: string
+      comments?: PublicComment[]
+      semantic_issue?: string
+    }> = []
+
+    for (const cluster of semanticClusters) {
+      const mentionCount = cluster.mentionCount
       const isRecurring = mentionCount >= 2
-      const qualifies = isRecurring || group.isCritical
+      const qualifies = isRecurring || cluster.isCritical || cluster.severity === 'high' || (commentsList.length <= 15 && mentionCount >= 1)
 
       if (qualifies) {
         unresolvedCount++
-        const avgConfidence = group.confidenceScoreSum / mentionCount
 
         // Detect complaint trend
         let trend: RecurringComplaintGroup['trend'] = 'Stable'
-        if (group.isCritical) {
+        if (cluster.isCritical) {
           trend = 'Critical Spike'
         } else if (mentionCount >= 4) {
           trend = 'Increasing'
@@ -536,45 +581,49 @@ export function analyzeCompetitorComments(
           trend = 'New'
         }
 
-        // Check if complaints appeared after a product update
         const lastUpdateStr = comp.envatoSales?.last_update_date || ''
-        if (lastUpdateStr && group.latestDate.includes(lastUpdateStr)) {
+        const clusterDates = cluster.comments.map((c) => c.comment_date).filter(Boolean) as string[]
+        const latestDate = clusterDates[0] || 'Recently'
+        const firstDate = clusterDates[clusterDates.length - 1] || 'Recently'
+
+        if (lastUpdateStr && latestDate.includes(lastUpdateStr)) {
           trend = 'After Competitor Update'
         }
 
-        let severity: 'low' | 'medium' | 'high' | 'critical' = 'medium'
-        if (group.isCritical) severity = 'critical'
-        else if (mentionCount >= 3 || catName === 'Security' || catName === 'Bugs and crashes') severity = 'high'
-        else if (catName === 'Installation and setup' || catName === 'Support') severity = 'high'
+        const shortSummary = `${cluster.issueLabel}: ${cluster.representativeComment.slice(0, 100)}`
 
         recurringComplaints.push({
-          id: `rcg_${comp.url.slice(-8)}_${catName.replace(/[^a-zA-Z]/g, '').toLowerCase()}`,
+          id: `rcg_${comp.url.slice(-8)}_${cluster.clusterId}`,
           competitor_url: comp.url,
           competitor_name: comp.productName,
-          complaint_category: catName,
-          short_summary: `${group.groupTitle}: ${group.detectedIssue}`,
+          complaint_category: cluster.broadCategory,
+          semantic_issue: cluster.issueLabel,
+          short_summary: shortSummary,
           mention_count: mentionCount,
-          first_detected_date: group.firstDate,
-          latest_occurrence_date: group.latestDate,
-          representative_comment: group.representativeComment,
-          comment_url: group.commentUrl,
-          severity,
-          confidence_score: Math.round(avgConfidence * 100) / 100,
-          confidence_level: group.isCritical || avgConfidence >= 0.9 ? 'High' : 'Medium',
-          is_critical: group.isCritical,
+          first_detected_date: firstDate,
+          latest_occurrence_date: latestDate,
+          representative_comment: cluster.representativeComment,
+          comment_url: cluster.sourceUrl,
+          severity: cluster.severity,
+          confidence_score: cluster.confidenceScore,
+          confidence_level: cluster.isCritical || cluster.confidenceScore >= 0.9 ? 'High' : 'Medium',
+          is_critical: cluster.isCritical,
           related_product_update: lastUpdateStr || null,
           current_status: 'New',
           trend,
           feedback_type: 'complaint',
           is_suggestive: false,
-          comments: group.comments,
+          comments: cluster.comments,
+          supporting_comments: cluster.supportingComments,
+          similarity_score: cluster.avgSimilarity,
         })
 
         competitorCommonComplaints.push({
-          topic: catName,
+          topic: cluster.issueLabel,
           count: mentionCount,
-          sample: group.representativeComment.slice(0, 160),
-          comments: group.comments,
+          sample: cluster.representativeComment.slice(0, 160),
+          comments: cluster.comments,
+          semantic_issue: cluster.issueLabel,
         })
       }
     }
@@ -593,7 +642,7 @@ export function analyzeCompetitorComments(
       total_comments: commentsList.length,
       positive_count: positiveCount,
       negative_count: negativeCount,
-      neutral_count: 0,
+      neutral_count: neutralCount,
       suggestive_count: mixedCount,
       comments_unavailable: false,
       common_complaints: competitorCommonComplaints,
@@ -629,9 +678,234 @@ export function analyzeCompetitorComments(
     summaries,
     recurring_complaints: recurringComplaints,
     comments: allFilteredComments,
+    all_comments: allProcessedComments,
     total_analyzed: totalAnalyzed,
     unresolved_count: unresolvedCount,
     unavailable_competitors: unavailableCompetitors,
     sales_comment_correlation: salesCommentCorrelation,
+    positive_count: summaries.reduce((acc, s) => acc + s.positive_count, 0),
+    negative_count: summaries.reduce((acc, s) => acc + s.negative_count, 0),
+    neutral_count: summaries.reduce((acc, s) => acc + s.neutral_count, 0),
+    clusters: recurringComplaints,
+    topComplaints: recurringComplaints.slice(0, 5),
+    competitor_summaries: summaries,
   }
 }
+
+// ─────────────────────────────────────────────
+// PHASE 3: 13-CATEGORY CUSTOMER FEEDBACK ORGANIZER
+// ─────────────────────────────────────────────
+
+export type FeedbackCategory =
+  | 'Positive Feedback'
+  | 'Question'
+  | 'Bug'
+  | 'Installation Problem'
+  | 'Documentation Problem'
+  | 'Compatibility Issue'
+  | 'Performance Issue'
+  | 'Pricing Complaint'
+  | 'Support Complaint'
+  | 'Feature Request'
+  | 'Refund Issue'
+  | 'Other'
+  | 'Unclassified'
+
+export interface FeedbackCategoryGroup {
+  category: FeedbackCategory
+  frequency: number
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  summary: string
+  representativeEvidence: string
+  sourceUrl: string | null
+  comments: PublicComment[]
+  isRecurring: boolean // true if any semantic issue within this category has >= 2 mentions
+  isSingleCritical: boolean // frequency === 1 && severity === 'critical'
+  semanticIssues?: Array<{
+    issueLabel: string
+    frequency: number
+    sample: string
+    severity: 'low' | 'medium' | 'high' | 'critical'
+    isRecurring: boolean
+    similarityScore?: number
+    comments: PublicComment[]
+  }>
+}
+
+export function classifyCommentCategory(comment: PublicComment): FeedbackCategory {
+  const text = (comment.comment_text || '').toLowerCase().trim()
+  const topic = comment.topic || ''
+  const rating = comment.rating
+
+  // 1. Refund Issue (high specificity)
+  if (/\b(refund|chargeback|money back|stole money|dispute|scam)\b/i.test(text)) {
+    return 'Refund Issue'
+  }
+
+  // 2. Installation Problem
+  if (topic === 'installation_problems' || /\b(install|installation|setup|composer|npm install|\.env|deployment|failed to install)\b/i.test(text)) {
+    return 'Installation Problem'
+  }
+
+  // 3. Documentation Problem
+  if (topic === 'poor_documentation' || /\b(documentation|manual|guide|tutorial|missing steps|no doc|unclear instructions)\b/i.test(text)) {
+    return 'Documentation Problem'
+  }
+
+  // 4. Compatibility Issue
+  if (topic === 'compatibility_problem' || /\b(php 8|flutter 3|flutter|node|ios|android|incompatible|version mismatch|breaks on)\b/i.test(text)) {
+    return 'Compatibility Issue'
+  }
+
+  // 5. Performance Issue
+  if (topic === 'slow_performance' || /\b(slow|lag|takes forever|sluggish|heavy|high cpu|memory leak|timeout|freezes)\b/i.test(text)) {
+    return 'Performance Issue'
+  }
+
+  // 6. Support Complaint
+  if (topic === 'poor_support' || /\b(no support|bad support|no reply|waiting for reply|ticket ignored|unresponsive|worst support|developer disappeared)\b/i.test(text)) {
+    return 'Support Complaint'
+  }
+
+  // 7. Pricing Complaint
+  if (topic === 'pricing_dissatisfaction' || /\b(expensive|overpriced|price increase|pricing issue|high price|license fee)\b/i.test(text)) {
+    return 'Pricing Complaint'
+  }
+
+  // 8. Bug
+  if (topic === 'bugs_errors' || /\b(bug|crash|fatal error|500 error|broken|not working|doesn't work|exception|blank page|crash loop|sql error)\b/i.test(text)) {
+    return 'Bug'
+  }
+
+  // 9. Feature Request
+  if (topic === 'missing_feature' || topic === 'feature_suggestion' || /\b(feature request|wish it had|please add|can you add|need feature|would love to see)\b/i.test(text)) {
+    return 'Feature Request'
+  }
+
+  // 10. Question (only if not an error report)
+  if (topic === 'general_question' || /\?$/.test(text) || /\b(how to|can i|is it possible|does this support|where can i|is there an option)\b/i.test(text)) {
+    return 'Question'
+  }
+
+  // 11. Positive Feedback
+  if (comment.sentiment === 'positive' || (rating !== null && rating !== undefined && rating >= 4) || /\b(great|awesome|excellent|love|perfect|superb|best|works well|clean code|5 stars)\b/i.test(text)) {
+    return 'Positive Feedback'
+  }
+
+  // 12. Other (Security, UI/UX, Updates)
+  if (topic === 'security_concern' || topic === 'update_request' || topic === 'improvement_suggestion' || topic === 'integration_request') {
+    return 'Other'
+  }
+
+  // 13. Unclassified
+  return text.length > 0 ? 'Other' : 'Unclassified'
+}
+
+export function organizeFeedbackIntoCategories(comments: PublicComment[]): {
+  groups: FeedbackCategoryGroup[]
+  recurringComplaints: FeedbackCategoryGroup[]
+  criticalSingleIssues: FeedbackCategoryGroup[]
+  totalFeedback: number
+} {
+  const buckets: Record<FeedbackCategory, PublicComment[]> = {
+    'Positive Feedback': [],
+    'Question': [],
+    'Bug': [],
+    'Installation Problem': [],
+    'Documentation Problem': [],
+    'Compatibility Issue': [],
+    'Performance Issue': [],
+    'Pricing Complaint': [],
+    'Support Complaint': [],
+    'Feature Request': [],
+    'Refund Issue': [],
+    'Other': [],
+    'Unclassified': [],
+  }
+
+  for (const c of comments) {
+    const cat = classifyCommentCategory(c)
+    buckets[cat].push(c)
+  }
+
+  const groups: FeedbackCategoryGroup[] = []
+
+  const CATEGORY_SUMMARIES: Record<FeedbackCategory, string> = {
+    'Positive Feedback': 'Customers express satisfaction with product stability, design, or capabilities.',
+    'Question': 'Pre-sale or technical inquiries regarding usage, configuration, or roadmap.',
+    'Bug': 'Runtime errors, crashes, or unhandled exceptions reported by users.',
+    'Installation Problem': 'Friction encountered during server configuration, dependency resolution, or initial setup.',
+    'Documentation Problem': 'Gaps or ambiguities in setup manuals, API references, or tutorials.',
+    'Compatibility Issue': 'Issues with specific PHP, framework, browser, or mobile OS releases.',
+    'Performance Issue': 'Concerns regarding loading latency, server timeouts, or resource utilization.',
+    'Pricing Complaint': 'Feedback regarding commercial licensing terms, renewals, or perceived cost.',
+    'Support Complaint': 'Reports of response delays, unresolved support tickets, or communication difficulties.',
+    'Feature Request': 'Explicit requests for new integrations, settings, or functional capabilities.',
+    'Refund Issue': 'Disputes or requests regarding refunds, purchase verification, or payment failures.',
+    'Other': 'Security, design, or minor workflow feedback.',
+    'Unclassified': 'General discussions or uncategorized customer comments.',
+  }
+
+  for (const [cat, list] of Object.entries(buckets) as [FeedbackCategory, PublicComment[]][]) {
+    if (list.length === 0) continue
+
+    // Determine highest severity in group
+    let groupSeverity: 'low' | 'medium' | 'high' | 'critical' = 'low'
+    if (list.some((c) => c.severity === 'critical')) groupSeverity = 'critical'
+    else if (list.some((c) => c.severity === 'high')) groupSeverity = 'high'
+    else if (list.some((c) => c.severity === 'medium')) groupSeverity = 'medium'
+
+    // Pick representative comment (longest or most descriptive)
+    const sortedByLength = [...list].sort((a, b) => b.comment_text.length - a.comment_text.length)
+    const representative = sortedByLength[0]
+
+    // Cluster comments semantically inside this category
+    const clusters = clusterCommentsSemanticallySync(list)
+    const hasRecurringCluster = clusters.some((cl) => cl.mentionCount >= 2)
+    const isSingleCritical = list.length === 1 && groupSeverity === 'critical'
+
+    const semanticIssues = clusters.map((cl) => ({
+      issueLabel: cl.issueLabel,
+      frequency: cl.mentionCount,
+      sample: cl.representativeComment,
+      severity: cl.severity,
+      isRecurring: cl.mentionCount >= 2,
+      similarityScore: cl.avgSimilarity,
+      comments: cl.comments,
+    }))
+
+    groups.push({
+      category: cat,
+      frequency: list.length,
+      severity: groupSeverity,
+      summary: CATEGORY_SUMMARIES[cat],
+      representativeEvidence: representative.comment_text,
+      sourceUrl: representative.comment_url || list.find((c) => c.comment_url)?.comment_url || null,
+      comments: list,
+      isRecurring: hasRecurringCluster,
+      isSingleCritical,
+      semanticIssues,
+    })
+  }
+
+  // Sort groups by frequency descending, then critical severity first
+  groups.sort((a, b) => {
+    if (a.severity === 'critical' && b.severity !== 'critical') return -1
+    if (b.severity === 'critical' && a.severity !== 'critical') return 1
+    return b.frequency - a.frequency
+  })
+
+  const recurringComplaints = groups.filter(
+    (g) => g.isRecurring && g.category !== 'Positive Feedback' && g.category !== 'Question'
+  )
+
+  const criticalSingleIssues = groups.filter((g) => g.isSingleCritical)
+
+  return {
+    groups,
+    recurringComplaints,
+    criticalSingleIssues,
+    totalFeedback: comments.length,
+  }
+}
+

@@ -1,17 +1,20 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Zap, ArrowRight, Loader2, AlertCircle } from 'lucide-react'
 import { signIn } from 'next-auth/react'
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const callbackUrl = searchParams.get('callbackUrl') || '/analyses'
+
   const [name, setName] = useState('')
-  const [tenantName, setTenantName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [companyName, setCompanyName] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
@@ -24,26 +27,31 @@ export default function RegisterPage() {
       const res = await fetch('/api/v1/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, tenantName }),
+        body: JSON.stringify({
+          name,
+          email: email.trim().toLowerCase(),
+          password,
+          tenantName: companyName.trim() || undefined,
+        }),
       })
 
       const data = await res.json()
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to create workspace')
+        throw new Error(data.error || 'Failed to create account')
       }
 
       // Auto sign-in
       const signInRes = await signIn('credentials', {
-        email,
+        email: email.trim().toLowerCase(),
         password,
         redirect: false,
       })
 
       if (signInRes?.error) {
-        router.push('/login')
+        router.push(`/login${callbackUrl !== '/analyses' ? `?callbackUrl=${encodeURIComponent(callbackUrl)}` : ''}`)
       } else {
-        router.push('/overview')
+        router.push(callbackUrl)
         router.refresh()
       }
     } catch (err: unknown) {
@@ -64,93 +72,95 @@ export default function RegisterPage() {
           <Zap className="h-5 w-5" />
         </div>
         <div>
-          <h2 className="text-xl font-bold tracking-tight text-foreground">Launch Your Growth Agent</h2>
-          <p className="text-xs text-muted-foreground">Setup your multi-tenant intelligence workspace</p>
+          <h2 className="text-xl font-bold tracking-tight text-foreground">
+            Sign Up
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Create your account to start analyzing products and competitors.
+          </p>
         </div>
       </div>
 
       {error && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" />
+        <div className="mb-6 flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-xs font-medium text-foreground mb-1.5" htmlFor="name">
-            Your Full Name
+          <label className="block text-xs font-semibold text-foreground mb-1">
+            Full Name
           </label>
           <input
-            id="name"
             type="text"
+            required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            required
-            placeholder="Alex Rivera"
-            className="w-full rounded-lg border border-border bg-background/50 px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+            placeholder="Jane Doe"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-foreground mb-1.5" htmlFor="tenantName">
-            SaaS Business / Organization Name
+          <label className="block text-xs font-semibold text-foreground mb-1">
+            Email Address
           </label>
           <input
-            id="tenantName"
-            type="text"
-            value={tenantName}
-            onChange={(e) => setTenantName(e.target.value)}
-            required
-            placeholder="Acme Analytics Inc."
-            className="w-full rounded-lg border border-border bg-background/50 px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-all"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-foreground mb-1.5" htmlFor="email">
-            Work Email
-          </label>
-          <input
-            id="email"
             type="email"
+            required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            required
-            placeholder="founder@company.com"
-            className="w-full rounded-lg border border-border bg-background/50 px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+            placeholder="jane@company.com"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-foreground mb-1.5" htmlFor="password">
-            Password (min 8 characters)
+          <label className="block text-xs font-semibold text-foreground mb-1">
+            Password
           </label>
           <input
-            id="password"
             type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
             required
             minLength={8}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
-            className="w-full rounded-lg border border-border bg-background/50 px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <span className="text-[10px] text-muted-foreground mt-1 block">
+            Minimum 8 characters
+          </span>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-foreground mb-1">
+            Company Name <span className="font-normal text-muted-foreground">(Optional)</span>
+          </label>
+          <input
+            type="text"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            placeholder="Acme Inc."
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
 
         <button
           type="submit"
           disabled={isLoading}
-          className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:bg-primary/90 focus:outline-none transition-all disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:bg-primary/90 focus:outline-none transition-all disabled:opacity-50 mt-2"
         >
           {isLoading ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Creating Workspace...
+              Creating Account...
             </>
           ) : (
             <>
-              Create Workspace
+              Sign Up
               <ArrowRight className="h-4 w-4" />
             </>
           )}
@@ -159,10 +169,27 @@ export default function RegisterPage() {
 
       <div className="mt-6 text-center text-xs text-muted-foreground">
         Already have an account?{' '}
-        <Link href="/login" className="font-semibold text-primary hover:underline">
+        <Link
+          href={`/login${callbackUrl !== '/analyses' ? `?callbackUrl=${encodeURIComponent(callbackUrl)}` : ''}`}
+          className="font-semibold text-primary hover:underline"
+        >
           Sign In
         </Link>
       </div>
     </div>
+  )
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="w-full rounded-2xl border border-border bg-card/60 p-8 shadow-2xl backdrop-blur-xl flex justify-center items-center min-h-[400px]">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      }
+    >
+      <RegisterForm />
+    </Suspense>
   )
 }

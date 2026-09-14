@@ -17,9 +17,12 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DeleteAnalysisDialog } from '@/components/analyses/delete-analysis-dialog';
 
 interface AdminAnalysisRecord {
   id: string;
+  name?: string;
+  projectName?: string | null;
   status: string;
   myUrl: string;
   competitorUrl: string;
@@ -41,7 +44,7 @@ export default function AdminAnalysesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   const fetchAnalyses = async () => {
@@ -66,30 +69,10 @@ export default function AdminAnalysesPage() {
     fetchAnalyses();
   }, []);
 
-  const handleDelete = async (id: string, url: string) => {
-    if (!confirm(`Delete analysis record for "${url}"? This cannot be undone.`)) return;
-
-    setDeletingId(id);
+  const openDeleteDialog = (id: string, name: string) => {
     setActionSuccess(null);
     setError(null);
-
-    try {
-      const res = await fetch(`/api/admin/analyses/${id}`, {
-        method: 'DELETE',
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to delete analysis');
-      }
-
-      setActionSuccess('Analysis deleted successfully.');
-      setAnalyses((prev) => prev.filter((a) => a.id !== id));
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setDeletingId(null);
-    }
+    setDeleteTarget({ id, name });
   };
 
   const filteredAnalyses = analyses.filter(
@@ -178,8 +161,6 @@ export default function AdminAnalysesPage() {
                 </tr>
               ) : (
                 filteredAnalyses.map((item) => {
-                  const isDeleting = deletingId === item.id;
-
                   return (
                     <tr key={item.id} className="hover:bg-muted/30 transition-colors">
                       {/* User */}
@@ -260,7 +241,7 @@ export default function AdminAnalysesPage() {
                       {/* Actions */}
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <Link href={`/analysis/${item.id}`}>
+                          <Link href={`/analyses/${item.id}`}>
                             <Button
                               variant="ghost"
                               size="sm"
@@ -274,8 +255,7 @@ export default function AdminAnalysesPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            disabled={isDeleting}
-                            onClick={() => handleDelete(item.id, item.myUrl)}
+                            onClick={() => openDeleteDialog(item.id, item.name || item.projectName || item.myUrl)}
                             className="h-7 text-[11px] px-2 text-red-400 hover:text-red-300 hover:bg-red-500/10"
                           >
                             <Trash2 className="h-3 w-3 mr-1" />
@@ -291,6 +271,21 @@ export default function AdminAnalysesPage() {
           </table>
         </div>
       </Card>
+
+      {/* Confirmation Dialog with Name Matching */}
+      {deleteTarget && (
+        <DeleteAnalysisDialog
+          open={!!deleteTarget}
+          onOpenChange={(open) => !open && setDeleteTarget(null)}
+          analysisId={deleteTarget.id}
+          analysisName={deleteTarget.name}
+          onDeleted={() => {
+            setActionSuccess(`Analysis "${deleteTarget.name}" and all dependent records permanently deleted.`);
+            setAnalyses((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+            setDeleteTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }

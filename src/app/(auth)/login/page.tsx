@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react'
 import { signIn } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { Swords, ArrowRight, Loader2, AlertCircle, Eye, EyeOff, Lock, Mail } from 'lucide-react'
 
 function LoginForm() {
@@ -15,7 +16,7 @@ function LoginForm() {
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
-  const callbackUrl = searchParams.get('callbackUrl') || '/'
+  const callbackUrl = searchParams.get('callbackUrl') || '/analyses'
   const urlError = searchParams.get('error')
 
   useEffect(() => {
@@ -148,9 +149,13 @@ function LoginForm() {
       </form>
 
       <div className="mt-6 pt-4 border-t border-border/60 text-center text-xs text-muted-foreground">
-        <p className="text-[11px]">
-          Access to this platform is invite-only. New accounts are provisioned directly by platform administrators.
-        </p>
+        Don&apos;t have an account yet?{' '}
+        <Link
+          href={`/signup${callbackUrl && callbackUrl !== '/analyses' ? `?callbackUrl=${encodeURIComponent(callbackUrl)}` : ''}`}
+          className="font-semibold text-primary hover:underline"
+        >
+          Sign Up
+        </Link>
       </div>
     </div>
   )

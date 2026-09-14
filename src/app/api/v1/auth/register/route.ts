@@ -7,19 +7,21 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { name, email, password, tenantName } = body
 
-    if (!name || !email || !password || !tenantName) {
-      return apiError('Name, email, password, and business name are required', 400)
+    if (!name || !email || !password) {
+      return apiError('Name, email, and password are required', 400)
     }
 
     if (password.length < 8) {
       return apiError('Password must be at least 8 characters', 400)
     }
 
+    const effectiveTenantName = tenantName?.trim() || `${name.trim()}'s Workspace`
+
     const result = await authService.register({
       name,
       email,
       password,
-      tenantName,
+      tenantName: effectiveTenantName,
     })
 
     return apiSuccess(

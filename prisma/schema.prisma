@@ -720,6 +720,7 @@ model ComparisonAnalysis {
   lastActivityCheckAt DateTime?
   nextActivityCheckAt DateTime?
   createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
   completedAt       DateTime?
 
   opportunities     CompetitorOpportunity[]
@@ -729,9 +730,27 @@ model ComparisonAnalysis {
   tenantId String?
   tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
+  // Reconciliation note: the following fields already existed on the live database
+  // (applied outside this repo's committed migration history, from prior "Antigravity" work)
+  // and were not represented in prisma/schema.prisma. They are documented here to match
+  // the live database exactly; no new migration was created for them and no data was changed.
+  platform           String    @default("envato") // presentational platform label set at analysis creation
+  selectedModules    String[]  @default([]) // subset of "seo" | "sales" | "reviews" | "comments" | "opportunities"
+  myProductName      String?
+  competitorNames    Json?
+  executiveSummary   String?
+  autoRefreshEnabled Boolean   @default(true)
+  lastRefreshedAt    DateTime?
+  nextRefreshAt      DateTime?
+  refreshLock        DateTime?
+  shareEnabled       Boolean   @default(false)
+  shareToken         String?   @unique
+
   @@index([userId])
   @@index([createdAt])
   @@index([tenantId])
+  @@index([platform])
+  @@index([shareToken])
   @@map("comparison_analyses")
 }
 

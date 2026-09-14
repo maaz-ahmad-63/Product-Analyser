@@ -1,6 +1,7 @@
 // scripts/activity-worker.ts
 // Standalone server-side worker for hourly activity monitoring
 
+import 'dotenv/config'
 import { activityScheduler } from '../src/services/activity-monitor/scheduler'
 
 async function main() {

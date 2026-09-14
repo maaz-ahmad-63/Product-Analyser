@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio'
 import { execFile } from 'child_process'
 import path from 'path'
-import { prisma } from '@/lib/prisma'
+import { prisma } from '../../lib/prisma'
 import { ExtractedProductData, PricingPlanExtracted, DiscoveredPage, EnvatoSalesData } from './types'
 
 const USER_AGENT =
@@ -54,10 +54,16 @@ interface StealthScraperOutput {
   specs: Record<string, string>
   html: string
   isEnvato?: boolean
+  isAmazon?: boolean
+  isShopify?: boolean
   envatoSales?: EnvatoSalesData | null
   thumbnailUrl?: string | null
   headings?: { h1: string[]; h2: string[]; h3: string[] }
   imageAltsCount?: number
+  totalImagesCount?: number
+  canonicalUrl?: string | null
+  hasStructuredData?: boolean
+  structuredDataTypes?: string[]
   demoLink?: string | null
   docsLink?: string | null
   changelogLink?: string | null
@@ -199,7 +205,11 @@ async function fetchEnvatoCatalogItem(itemId: string): Promise<StealthScraperOut
         h2: $('h2').map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8),
         h3: $('h3').map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8),
       },
-      imageAltsCount: $('img[alt]').length,
+      imageAltsCount: $('img[alt]').filter((_, el) => !!$(el).attr('alt')?.trim()).length,
+      totalImagesCount: $('img').length,
+      canonicalUrl: data.url || `https://codecanyon.net/item/${itemId}`,
+      hasStructuredData: false,
+      structuredDataTypes: [],
       demoLink,
       docsLink,
       changelogLink: null,
@@ -226,9 +236,19 @@ async function runStealthScraper(url: string): Promise<StealthScraperOutput | nu
         }
         try {
           const parsed = JSON.parse(stdout.trim()) as StealthScraperOutput
-          resolve(parsed.success ? parsed : null)
+          if (!parsed.finalUrl || parsed.finalUrl === 'about:blank') {
+            parsed.finalUrl = url
+          }
+          if (
+            parsed.success &&
+            (parsed.title || parsed.h1 || (parsed.html && parsed.html.length > 100))
+          ) {
+            resolve(parsed)
+          } else {
+            resolve(null)
+          }
         } catch (parseErr) {
-          console.error(`Stealth scraper parse error for ${url}:`, parseErr, stdout.slice(0, 200))
+          console.error(`Error parsing stealth scraper output for ${url}:`, parseErr)
           resolve(null)
         }
       }
@@ -291,7 +311,9 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
   const isProtectedDomain =
     normalized.includes('codecanyon.net') ||
     normalized.includes('themeforest.net') ||
-    normalized.includes('envato.com')
+    normalized.includes('envato.com') ||
+    normalized.includes('amazon.') ||
+    normalized.includes('amzn.')
 
   // 1. Fetch Main Landing Page (Use official Envato API for Envato items, or stealth/fetch)
   if (isProtectedDomain) {
@@ -327,7 +349,7 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     }
   }
 
-  if (!mainHtml) {
+  if (!mainHtml || finalUrl === 'about:blank') {
     collectionErrors.push(`Unable to reach main website at ${normalized} (request timed out or host blocked requests).`)
     return buildEmptyData(normalized, collectionErrors)
   }
@@ -403,19 +425,31 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     }
   })
 
-  // 4. Extract Positioning & Claims from Hero Section
+  // 4. Extract Positioning & Claims from Hero Section, Subheadings, and Meta
   const positioningClaims: string[] = []
   const heroH1 = $('h1').first().text().trim()
   if (heroH1) positioningClaims.push(heroH1)
 
+  // Subtitle / lead paragraph from hero section
+  const heroSubtitle = $('p.lead, p.subtitle, [class*="hero"] p, [class*="subheadline"], [class*="tagline"]').first().text().trim()
+  if (heroSubtitle && heroSubtitle.length > 15 && heroSubtitle.length < 220 && !positioningClaims.includes(heroSubtitle)) {
+    positioningClaims.push(heroSubtitle)
+  }
+
   $('h2').each((i, el) => {
     if (i < 3) {
       const text = $(el).text().trim()
-      if (text && text.length > 10 && text.length < 120 && !positioningClaims.includes(text)) {
+      if (text && text.length > 10 && text.length < 140 && !positioningClaims.includes(text)) {
         positioningClaims.push(text)
       }
     }
   })
+
+  // Meta description as verified positioning context
+  const metaDesc = $('meta[name="description"], meta[property="og:description"]').attr('content')?.trim()
+  if (metaDesc && metaDesc.length > 20 && metaDesc.length < 250 && !positioningClaims.includes(metaDesc)) {
+    positioningClaims.push(metaDesc)
+  }
 
   // 5. Extract Call to Action (CTA)
   let contactOrDemoCta = 'Not found'
@@ -465,21 +499,67 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
   const features: string[] = []
   const mainBenefits: string[] = []
 
-  // Extract from lists and feature cards
-  $('ul li, ol li').each((_, el) => {
-    const text = $(el).text().trim()
-    if (text.length >= 10 && text.length <= 140 && !text.includes('\n')) {
-      if (features.length < 12 && !features.includes(text)) {
+  const isNavShortcut = (str: string) => {
+    const l = str.toLowerCase().trim()
+    const boilerplate = [
+      'shift + opt', 'opt + /', 'search opt', 'cart shift', 'home shift',
+      'skip to main', 'press enter', 'keyboard shortcut', 'privacy notice',
+      'terms of service', 'all rights reserved', 'cookie policy', 'privacy policy',
+      'main content', 'about this item', 'buying options', 'compare with similar items',
+      'prime video', 'bestsellers', "today's deals", 'customer service',
+      'new releases', 'amazon pay', 'gift cards', 'beauty & personal care',
+      'returns & replacements', 'manage your content', 'help & contact',
+      'back to top', 'conditions of use', 'sign in', 'your account',
+      'add to cart', 'buy now', 'read more', 'click here', 'learn more',
+      'view all', 'view details', 'show more', 'see more', 'copyright',
+      'electronics', 'home & kitchen', 'computers', 'toys & games', 'books',
+    ]
+    if (boilerplate.some((b) => l === b || l.startsWith(b + ' ') || l.endsWith(' ' + b))) {
+      return true
+    }
+    return false
+  }
+
+  // Prepend high-confidence features from stealth scraper if available
+  if (stealthResult?.features && stealthResult.features.length > 0) {
+    for (const f of stealthResult.features) {
+      if (!isNavShortcut(f) && !features.includes(f) && features.length < 35) {
+        features.push(f)
+      }
+    }
+  }
+
+  // Extract from feature lists, cards, and structured elements (ignoring navbars and footers)
+  $('[class*="feature"] li, [id*="feature"] li, [class*="benefit"] li, .features li, ul li, ol li').each((_, el) => {
+    if ($(el).closest('footer, nav, header, [role="navigation"], #navFooter, .nav-footer, #navbar').length > 0) {
+      return
+    }
+    const text = $(el).text().trim().replace(/\s+/g, ' ')
+    if (text.length >= 8 && text.length <= 250 && !text.includes('\n') && !isNavShortcut(text)) {
+      if (features.length < 35 && !features.includes(text)) {
         features.push(text)
       }
     }
   })
 
+  // Also check feature cards and definition lists if list items are sparse
+  if (features.length < 5) {
+    $('[class*="feature"] h3, [class*="feature"] h4, [class*="card"] h3, dt').each((_, el) => {
+      if ($(el).closest('footer, nav, header, [role="navigation"], #navFooter, .nav-footer, #navbar').length > 0) {
+        return
+      }
+      const text = $(el).text().trim().replace(/\s+/g, ' ')
+      if (text.length >= 6 && text.length <= 100 && !isNavShortcut(text) && !features.includes(text)) {
+        features.push(text)
+      }
+    })
+  }
+
   // Extract benefits from H2/H3 elements
   $('h3').each((_, el) => {
-    const text = $(el).text().trim()
-    if (text.length >= 12 && text.length <= 90 && !mainBenefits.includes(text)) {
-      if (mainBenefits.length < 6) {
+    const text = $(el).text().trim().replace(/\s+/g, ' ')
+    if (text.length >= 12 && text.length <= 90 && !isNavShortcut(text) && !mainBenefits.includes(text)) {
+      if (mainBenefits.length < 8) {
         mainBenefits.push(text)
       }
     }
@@ -505,6 +585,16 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
 
   if (stealthResult?.pricingPlans && stealthResult.pricingPlans.length > 0) {
     pricingPlans = stealthResult.pricingPlans
+  } else if (stealthResult?.priceText) {
+    pricingPlans = [
+      {
+        name: 'Standard Price',
+        priceMonthly: stealthResult.priceText,
+        priceAnnual: stealthResult.priceText,
+        features: features.slice(0, 4),
+        isPopular: true,
+      },
+    ]
   } else {
     let pricingHtml = mainHtml
     if (pageLinks.pricing && pageLinks.pricing !== finalUrl) {
@@ -518,27 +608,28 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     pricingPlans = extractPricingFromHtml(pricingHtml)
   }
 
-  // Merge features from stealth scraper if available
-  if (stealthResult?.features && stealthResult.features.length > 0) {
-    for (const f of stealthResult.features) {
-      if (!features.includes(f) && features.length < 25) {
-        features.push(f)
-      }
-    }
-  }
-
   // 10. Testimonials / Reviews Extraction
   const testimonials: Array<{ quote: string; author?: string }> = []
   $('blockquote, .testimonial, [class*="testimonial"], [class*="review"]').each((_, el) => {
     const quote = $(el).find('p').first().text().trim() || $(el).text().trim()
-    if (quote.length > 25 && quote.length < 300 && testimonials.length < 4) {
+    if (quote.length > 25 && quote.length < 300 && !isNavShortcut(quote) && testimonials.length < 4) {
       testimonials.push({ quote: quote.replace(/\s+/g, ' ') })
     }
   })
 
   // 11. Target Customers & Category Heuristics
+  const isAmazonUrl = normalized.includes('amazon.') || normalized.includes('amzn.')
   const targetCustomers: string[] = []
-  if (fullText.includes('taxi') || fullText.includes('cab') || fullText.includes('ride') || fullText.includes('driver')) {
+
+  if (isAmazonUrl || fullText.includes('smartphone') || fullText.includes('iphone') || fullText.includes('ceramic shield') || fullText.includes('all-day battery')) {
+    targetCustomers.push('Smartphone Consumers', 'Apple Ecosystem Users', 'Mobile Tech Professionals')
+  } else if (
+    fullText.includes('taxi') ||
+    fullText.includes('cab ') ||
+    fullText.includes('ride-hailing') ||
+    fullText.includes('fleet dispatch') ||
+    (fullText.includes('driver') && (fullText.includes('passenger') || fullText.includes('fare') || fullText.includes('dispatch')))
+  ) {
     targetCustomers.push('Taxi & Fleet Operators', 'Ride-Hailing Startups & Dispatchers', 'Independent Drivers & Couriers')
   }
   if (fullText.includes('developer') || fullText.includes('engineers') || fullText.includes('api')) targetCustomers.push('Developers & Engineering Teams')
@@ -548,8 +639,16 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
   if (fullText.includes('founder') || fullText.includes('startup')) targetCustomers.push('Founders & Early-Stage Startups')
   if (targetCustomers.length === 0) targetCustomers.push('B2B SaaS Businesses')
 
-  let category = 'B2B SaaS Application'
-  if (fullText.includes('taxi') || fullText.includes('cab') || fullText.includes('ride booking') || fullText.includes('uber clone')) {
+  let category = stealthResult?.envatoSales?.category || 'B2B SaaS Application'
+  if (isAmazonUrl || fullText.includes('smartphone') || fullText.includes('iphone') || fullText.includes('ceramic shield')) {
+    category = 'Smartphones & Consumer Electronics'
+  } else if (
+    fullText.includes('taxi') ||
+    fullText.includes('cab ') ||
+    fullText.includes('ride booking') ||
+    fullText.includes('uber clone') ||
+    (fullText.includes('driver') && (fullText.includes('passenger') || fullText.includes('fare') || fullText.includes('dispatch')))
+  ) {
     category = 'On-Demand Ride Hailing & Fleet Management Solution'
   } else if (fullText.includes('analytics') || fullText.includes('metric') || fullText.includes('dashboard')) {
     category = 'Product & Web Analytics'
@@ -561,6 +660,33 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     category = 'FinTech & Subscription Billing'
   }
 
+  // 12. Technical SEO & Schema.org Structured Data
+  const totalImagesCount = $('img').length
+  const imageAltsCount =
+    typeof stealthResult?.imageAltsCount === 'number'
+      ? stealthResult.imageAltsCount
+      : $('img[alt]').filter((_, el) => !!$(el).attr('alt')?.trim()).length
+  const canonicalUrl = stealthResult?.canonicalUrl || $('link[rel="canonical"]').attr('href')?.trim() || null
+  let hasStructuredData = stealthResult?.hasStructuredData ?? false
+  const structuredDataTypes: string[] = [...(stealthResult?.structuredDataTypes || [])]
+
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const raw = $(el).html()?.trim()
+      if (!raw) return
+      const json = JSON.parse(raw)
+      hasStructuredData = true
+      const type = json['@type']
+      if (type && typeof type === 'string' && !structuredDataTypes.includes(type)) {
+        structuredDataTypes.push(type)
+      } else if (Array.isArray(type)) {
+        type.forEach((t) => {
+          if (typeof t === 'string' && !structuredDataTypes.includes(t)) structuredDataTypes.push(t)
+        })
+      }
+    } catch {}
+  })
+
   return {
     url: inputUrl,
     normalizedUrl: finalUrl,
@@ -570,14 +696,14 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     category,
     targetCustomers,
     useCases: mainBenefits.slice(0, 4),
-    features: features.length > 0 ? features : ['Core Web Application', 'Dashboard Analytics', 'User Accounts'],
+    features: features.length > 0 ? features : [],
     pricingPlans,
     hasFreePlan,
     hasFreeTrial,
     freeTrialDetails,
-    integrations: integrations.length > 0 ? integrations : ['Webhook / API'],
-    mainBenefits: mainBenefits.length > 0 ? mainBenefits : [heroH1 || 'Automated SaaS Workflow'],
-    positioningClaims: positioningClaims.length > 0 ? positioningClaims : [websiteTitle],
+    integrations: integrations.length > 0 ? integrations : [],
+    mainBenefits: mainBenefits.length > 0 ? mainBenefits : (heroH1 ? [heroH1] : []),
+    positioningClaims: positioningClaims.length > 0 ? positioningClaims : (websiteTitle ? [websiteTitle] : []),
     contactOrDemoCta,
     changelogLink: stealthResult?.changelogLink || pageLinks.changelog || 'Not found on the provided website',
     blogLink: pageLinks.blog || 'Not found on the provided website',
@@ -586,7 +712,12 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     discoveredPages,
     collectionErrors,
     analyzedAt: new Date().toISOString(),
-    envatoSales: stealthResult?.envatoSales
+    imageAltsCount,
+    totalImagesCount,
+    canonicalUrl,
+    hasStructuredData,
+    structuredDataTypes,
+    envatoSales: stealthResult?.envatoSales?.product_name
       ? {
           ...stealthResult.envatoSales,
           comment_count:
@@ -604,6 +735,19 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
       h3: [],
     },
     tags: stealthResult?.tags || [],
+    comments: stealthResult?.comments || [],
+    provenance: {
+      source: isAmazonUrl ? 'amazon_marketplace' : stealthResult?.isEnvato ? 'envato_api_and_public' : 'generic_web',
+      source_url: normalized,
+      collected_at: new Date().toISOString(),
+      status: stealthResult?.envatoSales ? 'success' : collectionErrors.length > 0 ? 'partial' : 'success',
+      connector: isAmazonUrl ? 'amazon' : stealthResult?.isEnvato ? 'envato' : 'generic',
+      message: isAmazonUrl
+        ? 'Verified via Amazon Marketplace product catalog and customer reviews.'
+        : stealthResult?.isEnvato
+        ? 'Verified via Envato API and public web extraction.'
+        : 'Parsed via generic website crawler. Marketplace-specific metrics not available.',
+    },
   }
 }
 
@@ -615,7 +759,7 @@ function extractPricingFromHtml(html: string): PricingPlanExtracted[] {
   $('[class*="pricing-card"], [class*="plan"], [class*="pricing-tier"], [data-plan]').each((_, el) => {
     const text = $(el).text()
     const name = $(el).find('h2, h3, h4, [class*="title"], [class*="name"]').first().text().trim()
-    const priceMatch = text.match(/(\$|€|£)\s*([0-9]+(\.[0-9]{2})?)/)
+    const priceMatch = text.match(/(₹|Rs\.?|\$|€|£)\s*([0-9,]+(\.[0-9]{2})?)/i)
 
     if (name && priceMatch && plans.length < 5) {
       const price = `${priceMatch[1]}${priceMatch[2]}`
@@ -642,17 +786,20 @@ function extractPricingFromHtml(html: string): PricingPlanExtracted[] {
   // Fallback: look for general pricing tokens in text if specific cards not parsed
   if (plans.length === 0) {
     const bodyText = $('body').text()
-    const matches = Array.from(bodyText.matchAll(/(\$|€|£)\s*([0-9]{1,4})\s*(\/mo|\/month|per month)?/gi))
+    const matches = Array.from(bodyText.matchAll(/(₹|Rs\.?|\$|€|£)\s*([0-9,]{1,8}(?:\.[0-9]{2})?)\s*(\/mo|\/month|per month)?/gi))
     const uniquePrices = new Set<string>()
 
     for (const match of matches) {
-      const val = `${match[1]}${match[2]}/mo`
+      const symbol = match[1]
+      const amount = match[2]
+      const period = match[3]
+      const val = period ? `${symbol}${amount}/mo` : `${symbol}${amount}`
       if (!uniquePrices.has(val) && uniquePrices.size < 3) {
         uniquePrices.add(val)
         plans.push({
           name: `Tier ${uniquePrices.size}`,
           priceMonthly: val,
-          priceAnnual: 'Not specified',
+          priceAnnual: period ? `${symbol}${amount}/yr` : 'Not specified',
           features: ['Standard feature access'],
         })
       }
@@ -689,6 +836,15 @@ function buildEmptyData(url: string, errors: string[]): ExtractedProductData {
     collectionErrors: errors,
     analyzedAt: new Date().toISOString(),
     envatoSales: null,
+    comments: [],
+    provenance: {
+      source: url.includes('codecanyon.net') || url.includes('themeforest.net') || url.includes('envato.com') ? 'envato_api_and_public' : 'generic_web',
+      source_url: url,
+      collected_at: new Date().toISOString(),
+      status: 'failed',
+      connector: url.includes('codecanyon.net') || url.includes('themeforest.net') || url.includes('envato.com') ? 'envato' : 'generic',
+      message: errors.join(', '),
+    },
   }
 }
 

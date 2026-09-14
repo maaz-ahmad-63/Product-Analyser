@@ -82,16 +82,24 @@ export class ActivityMonitoringScheduler {
     const results: MonitoringCycleProjectResult[] = []
 
     try {
-      // Find eligible analyses
+      // Find eligible analyses: only refresh if >= 50 minutes have elapsed since last check
+      const fiftyMinutesAgo = new Date(Date.now() - 50 * 60 * 1000)
       const analyses = await prisma.comparisonAnalysis.findMany({
         where: targetAnalysisId
           ? { id: targetAnalysisId }
-          : { status: { in: ['completed', 'running'] } },
+          : {
+              status: { in: ['completed', 'running'] },
+              autoRefreshEnabled: true,
+              OR: [
+                { lastActivityCheckAt: null },
+                { lastActivityCheckAt: { lte: fiftyMinutesAgo } },
+              ],
+            },
         orderBy: { createdAt: 'desc' },
         take: 20, // process up to 20 projects per cycle
       })
 
-      console.log(`[ActivityScheduler] Checking ${analyses.length} projects for hourly updates...`)
+      console.log(`[ActivityScheduler] Checking ${analyses.length} eligible projects for hourly updates...`)
 
       for (const analysis of analyses) {
         const projectResult = await this.monitorProject(analysis)
@@ -306,14 +314,40 @@ export class ActivityMonitoringScheduler {
       }
     }
 
-    // Step 4: Update analysis tracking timestamps
-    await prisma.comparisonAnalysis.update({
-      where: { id: analysis.id },
-      data: {
+    // Step 4: Update analysis tracking timestamps and live product models
+    try {
+      const existingRecord = await prisma.comparisonAnalysis.findUnique({
+        where: { id: analysis.id },
+        select: { myProduct: true, competitorsData: true },
+      })
+
+      const updatePayload: any = {
         lastActivityCheckAt: checkTimestamp,
         nextActivityCheckAt: nextCheckAt,
-      },
-    })
+        lastRefreshedAt: checkTimestamp,
+        nextRefreshAt: nextCheckAt,
+      }
+
+      // If our product was extracted and has envatoSales, merge it into myProduct
+      if (existingRecord?.myProduct) {
+        const myProdObj = existingRecord.myProduct as any
+        const latestOurSnapshot = previousSnapshotsMap[analysis.myUrl]
+        if (ourProductSales !== null || latestOurSnapshot) {
+          myProdObj.envatoSales = {
+            ...(myProdObj.envatoSales || {}),
+            current_total_sales: ourProductSales ?? myProdObj.envatoSales?.current_total_sales,
+          }
+          updatePayload.myProduct = myProdObj
+        }
+      }
+
+      await prisma.comparisonAnalysis.update({
+        where: { id: analysis.id },
+        data: updatePayload,
+      })
+    } catch (updateErr) {
+      console.error('[ActivityScheduler] Error updating analysis with live sales:', updateErr)
+    }
 
     return {
       analysisId: analysis.id,

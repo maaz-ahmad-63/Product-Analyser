@@ -19,10 +19,21 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { useState } from 'react'
+import Link from 'next/link'
+import { useSession, signOut } from 'next-auth/react'
+import { useProject } from '@/context/project-provider'
 
 export function AppHeader() {
   const pathname = usePathname()
-  const [currentOrg, setCurrentOrg] = useState('Acme Analytics')
+  const { data: session } = useSession()
+  const { projects, currentProjectId, currentProjectMeta, setCurrentProjectId } = useProject()
+  const activeName = currentProjectMeta?.name || (projects.length > 0 ? projects[0].name : 'Select Project')
+
+  const userName = session?.user?.name || session?.user?.email?.split('@')[0] || 'User'
+  const userEmail = session?.user?.email || 'user@domain.com'
+  const userRole = session?.user?.role || 'user'
+  const userInitial = (userName?.[0] || 'U').toUpperCase()
+  const currentTenant = session?.user?.tenants?.[0]?.name || 'Active Workspace'
 
   // Generate breadcrumb title from path
   const pathSegments = pathname.split('/').filter(Boolean)
@@ -47,31 +58,39 @@ export function AppHeader() {
             >
               <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
               <span className="truncate max-w-[120px] sm:max-w-[160px]">
-                {currentOrg}
+                {activeName}
               </span>
               <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-52">
+          <DropdownMenuContent align="start" className="w-60">
             <div className="px-2 py-1.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-              Workspaces
+              Workspaces & Projects ({projects.length})
             </div>
-            {['Acme Analytics', 'Dev Staging Sandbox'].map((org) => (
-              <DropdownMenuItem
-                key={org}
-                onClick={() => setCurrentOrg(org)}
-                className="flex items-center justify-between text-xs"
-              >
-                <span>{org}</span>
-                {org === currentOrg && (
-                  <Check className="h-3.5 w-3.5 text-primary" />
-                )}
-              </DropdownMenuItem>
-            ))}
+            {projects.length === 0 ? (
+              <div className="px-2 py-2 text-xs text-muted-foreground">
+                No analyses found
+              </div>
+            ) : (
+              projects.map((p) => (
+                <DropdownMenuItem
+                  key={p.id}
+                  onClick={() => setCurrentProjectId(p.id)}
+                  className="flex items-center justify-between text-xs cursor-pointer"
+                >
+                  <span className="truncate max-w-[190px]">{p.name}</span>
+                  {p.id === currentProjectId && (
+                    <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />
+                  )}
+                </DropdownMenuItem>
+              ))
+            )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-xs text-muted-foreground">
-              + Add Organization
-            </DropdownMenuItem>
+            <Link href="/analyses/new">
+              <DropdownMenuItem className="text-xs text-primary font-medium cursor-pointer">
+                + New Analysis / Project
+              </DropdownMenuItem>
+            </Link>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -147,27 +166,46 @@ export function AppHeader() {
               className="h-7 gap-1.5 px-2 text-xs border-border bg-card/60"
             >
               <div className="flex h-4 w-4 items-center justify-center rounded bg-primary/20 text-[10px] font-bold text-primary">
-                A
+                {userInitial}
               </div>
-              <span className="truncate max-w-[80px] hidden sm:inline text-foreground">
-                Alex Rivera
+              <span className="truncate max-w-[90px] hidden sm:inline text-foreground">
+                {userName}
               </span>
               <ChevronDown className="h-3 w-3 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <div className="p-2 border-b border-border text-xs">
-              <span className="font-medium text-foreground block">Alex Rivera</span>
+          <DropdownMenuContent align="end" className="w-56">
+            <div className="p-2.5 border-b border-border text-xs space-y-0.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-foreground truncate">{userName}</span>
+                <span className="text-[10px] uppercase font-bold px-1.5 py-0.2 rounded bg-primary/10 text-primary">
+                  {userRole}
+                </span>
+              </div>
               <span className="text-[11px] text-muted-foreground block truncate">
-                founder@acmeanalytics.io
+                {userEmail}
+              </span>
+              <span className="text-[10px] text-muted-foreground/80 block truncate pt-0.5">
+                Workspace: {currentTenant}
               </span>
             </div>
-            <DropdownMenuItem className="text-xs gap-2">
-              <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
-              <span>Profile & Role</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-xs gap-2 text-rose-400">
+
+            {userRole === 'admin' && (
+              <>
+                <Link href="/admin">
+                  <DropdownMenuItem className="text-xs gap-2 cursor-pointer text-primary">
+                    <UserIcon className="h-3.5 w-3.5" />
+                    <span>Admin Control Center</span>
+                  </DropdownMenuItem>
+                </Link>
+                <DropdownMenuSeparator />
+              </>
+            )}
+
+            <DropdownMenuItem
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              className="text-xs gap-2 text-rose-400 cursor-pointer"
+            >
               <LogOut className="h-3.5 w-3.5" />
               <span>Sign out</span>
             </DropdownMenuItem>

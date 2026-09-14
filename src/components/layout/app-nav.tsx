@@ -28,6 +28,17 @@ export function AppNav() {
 
         <nav className="flex items-center gap-1">
           <Link
+            href="/analyses"
+            className={cn(
+              'px-3 py-1.5 text-xs font-medium rounded transition-colors',
+              pathname?.startsWith('/analyses')
+                ? 'bg-muted text-foreground font-semibold'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+            )}
+          >
+            Analyses
+          </Link>
+          <Link
             href="/"
             className={cn(
               'px-3 py-1.5 text-xs font-medium rounded transition-colors',
@@ -36,7 +47,7 @@ export function AppNav() {
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             )}
           >
-            Analyze
+            Quick Compare
           </Link>
           <Link
             href="/history"
@@ -47,7 +58,7 @@ export function AppNav() {
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             )}
           >
-            Analysis History
+            History
           </Link>
           {isAdmin && (
             <Link
@@ -69,10 +80,10 @@ export function AppNav() {
       <div className="flex items-center gap-2 sm:gap-3">
         <ThemeToggle />
 
-        <Link href="/">
+        <Link href="/analyses/new">
           <Button size="sm" className="h-8 gap-1.5 text-xs font-medium">
             <PlusCircle className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">New Comparison</span>
+            <span className="hidden sm:inline">New Analysis</span>
           </Button>
         </Link>
 

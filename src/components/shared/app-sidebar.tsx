@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Building,
   Swords,
+  Layers,
   Activity,
   MessageSquare,
   Lightbulb,
@@ -21,31 +22,143 @@ import {
   ChevronRight,
   ShieldCheck,
   Zap,
+  Sparkles,
+  DollarSign,
+  Star,
+  TrendingUp,
+  Search,
 } from 'lucide-react'
 
-const navigationItems = [
-  { name: 'Overview', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'My SaaS', href: '/dashboard/my-saas', icon: Building },
-  { name: 'Competitors', href: '/dashboard/competitors', icon: Swords },
-  { name: 'Competitor Changes', href: '/dashboard/changes', icon: Activity, badge: '19' },
-  { name: 'Reviews & Comments', href: '/dashboard/reviews', icon: MessageSquare },
-  { name: 'Product Recommendations', href: '/dashboard/recommendations', icon: Lightbulb, badge: '6' },
-  { name: 'Customer Opportunities', href: '/dashboard/opportunities', icon: Target, badge: '14' },
-  { name: 'Leads and Outreach', href: '/dashboard/leads', icon: Users },
-  { name: 'Reports', href: '/dashboard/reports', icon: FileBarChart },
-  { name: 'Monitoring Jobs', href: '/dashboard/jobs', icon: ListTodo },
-  { name: 'Integrations', href: '/dashboard/integrations', icon: Plug },
-  { name: 'Settings', href: '/dashboard/settings', icon: Settings },
+interface NavItem {
+  name: string
+  href: string
+  icon: any
+  moduleId?: string // maps to AVAILABLE_MODULES id
+  badgeKey?: string
+  badgeFallback?: string
+}
+
+interface NavSection {
+  title?: string
+  items: NavItem[]
+}
+
+const navSections: NavSection[] = [
+  {
+    items: [
+      { name: 'Overview', href: '/dashboard', icon: LayoutDashboard },
+    ],
+  },
+  {
+    title: 'Intelligence Modules',
+    items: [
+      {
+        name: 'Product Intelligence',
+        href: '/dashboard/changes',
+        icon: Sparkles,
+        moduleId: 'product_intelligence',
+        badgeKey: 'Product Intelligence',
+      },
+      {
+        name: 'Sales & Pricing',
+        href: '/dashboard/my-saas',
+        icon: DollarSign,
+        moduleId: 'sales',
+        badgeKey: 'Sales & Pricing',
+      },
+      {
+        name: 'Reviews & Ratings',
+        href: '/dashboard/reviews',
+        icon: Star,
+        moduleId: 'reviews',
+        badgeKey: 'Reviews & Ratings',
+      },
+      {
+        name: 'Comments & Sentiment',
+        href: '/dashboard/comments',
+        icon: MessageSquare,
+        moduleId: 'comments',
+        badgeKey: 'Comments & Sentiment',
+      },
+      {
+        name: 'Opportunities & Leads',
+        href: '/dashboard/opportunities',
+        icon: TrendingUp,
+        moduleId: 'opportunities',
+        badgeKey: 'Opportunities & Leads',
+      },
+      {
+        name: 'SEO & Keywords',
+        href: '/dashboard/seo',
+        icon: Search,
+        moduleId: 'seo',
+        badgeKey: 'SEO & Keywords',
+      },
+    ],
+  },
+  {
+    title: 'Workspace',
+    items: [
+      { name: 'Competitors', href: '/dashboard/competitors', icon: Swords, badgeKey: 'Competitors' },
+      { name: 'All Analyses', href: '/analyses', icon: Layers },
+      { name: 'Reports', href: '/dashboard/reports', icon: FileBarChart },
+      { name: 'Settings & Modules', href: '/dashboard/settings', icon: Settings },
+    ],
+  },
 ]
 
-export function AppSidebar() {
+import { useB2bShell } from '@/components/layout/b2b-shell'
+import { useProject } from '@/context/project-provider'
+
+interface AppSidebarProps {
+  collapsed?: boolean
+  onToggle?: () => void
+}
+
+export function AppSidebar({ collapsed: controlledCollapsed, onToggle }: AppSidebarProps = {}) {
   const pathname = usePathname()
-  const [collapsed, setCollapsed] = useState(false)
+  const { currentProjectData, currentProjectMeta } = useProject()
+  const [internalCollapsed, setInternalCollapsed] = useState(false)
+  const collapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed
+  const handleToggle = onToggle || (() => setInternalCollapsed(!internalCollapsed))
+  const { collapsed: mainCollapsed } = useB2bShell()
+
+  const selectedModules: string[] = currentProjectMeta?.selectedModules || []
+  const hasModuleFilter = selectedModules.length > 0
+
+  const dynamicBadges: Record<string, string | undefined> = {
+    'Product Intelligence': currentProjectData?.comparison?.competitorExclusiveFeatures?.length
+      ? String(currentProjectData.comparison.competitorExclusiveFeatures.length)
+      : currentProjectData?.my_product?.features?.length
+      ? String(currentProjectData.my_product.features.length)
+      : undefined,
+    'Sales & Pricing': currentProjectData?.comparison?.pricingDifferences?.length
+      ? String(currentProjectData.comparison.pricingDifferences.length)
+      : undefined,
+    'Reviews & Ratings': currentProjectData?.comments_analysis?.total_analyzed
+      ? String(currentProjectData.comments_analysis.total_analyzed)
+      : undefined,
+    'Comments & Sentiment': currentProjectData?.comments_analysis?.clusters?.length
+      ? String(currentProjectData.comments_analysis.clusters.length)
+      : undefined,
+    'Opportunities & Leads': currentProjectData?.opportunities?.length
+      ? String(currentProjectData.opportunities.length)
+      : undefined,
+    'SEO & Keywords': currentProjectData?.seo_analysis?.keyword_matrix?.top_target_keywords?.length
+      ? String(currentProjectData.seo_analysis.keyword_matrix.top_target_keywords.length)
+      : undefined,
+    'Competitors': currentProjectData?.competitors_data?.length
+      ? String(currentProjectData.competitors_data.length)
+      : undefined,
+  }
+
+  const mainOffset = mainCollapsed ? '3.5rem' : '14rem'
 
   return (
     <aside
+      style={{ left: mainOffset }}
       className={cn(
-        'fixed left-0 top-0 z-40 h-screen border-r border-sidebar-border bg-sidebar flex flex-col transition-all duration-200 select-none',
+        'fixed top-0 z-40 h-screen border-r border-sidebar-border bg-sidebar flex flex-col transition-all duration-200 select-none left-0 lg:left-[var(--main-sidebar-width,3.5rem)]',
         collapsed ? 'w-14' : 'w-56'
       )}
     >
@@ -69,48 +182,72 @@ export function AppSidebar() {
       </div>
 
       {/* Navigation List */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
-        {navigationItems.map((item) => {
-          const isActive =
-            pathname === item.href ||
-            (item.href !== '/dashboard' && pathname?.startsWith(item.href))
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-3">
+        {navSections.map((section, sIdx) => {
+          // Filter items based on selectedModules if applicable
+          const visibleItems = section.items.filter((item) => {
+            if (!item.moduleId || !hasModuleFilter) return true
+            return selectedModules.includes(item.moduleId)
+          })
+
+          if (visibleItems.length === 0) return null
 
           return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                'group flex items-center gap-2.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
-                isActive
-                  ? 'bg-sidebar-active text-sidebar-active-foreground border-l-2 border-primary'
-                  : 'text-sidebar-foreground hover:bg-sidebar-active/60 hover:text-foreground'
+            <div key={sIdx} className="space-y-0.5">
+              {!collapsed && section.title && (
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+                  {section.title}
+                </div>
               )}
-              title={collapsed ? item.name : undefined}
-            >
-              <item.icon
-                className={cn(
-                  'h-4 w-4 shrink-0 transition-colors',
-                  isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'
-                )}
-              />
-              {!collapsed && (
-                <>
-                  <span className="truncate flex-1">{item.name}</span>
-                  {item.badge && (
-                    <span
+              {visibleItems.map((item) => {
+                const isActive =
+                  pathname === item.href ||
+                  (item.href === '/dashboard' && (pathname === '/dashboard' || pathname === '/overview')) ||
+                  (item.href !== '/dashboard' && !item.href.includes('#') && pathname?.startsWith(item.href))
+
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    className={cn(
+                      'group flex items-center gap-2.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
+                      isActive
+                        ? 'bg-sidebar-active text-sidebar-active-foreground border-l-2 border-primary'
+                        : 'text-sidebar-foreground hover:bg-sidebar-active/60 hover:text-foreground'
+                    )}
+                    title={collapsed ? item.name : undefined}
+                  >
+                    <item.icon
                       className={cn(
-                        'rounded px-1.5 py-0.2 text-[10px] font-semibold',
-                        isActive
-                          ? 'bg-primary/20 text-primary'
-                          : 'bg-muted text-muted-foreground'
+                        'h-4 w-4 shrink-0 transition-colors',
+                        isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'
                       )}
-                    >
-                      {item.badge}
-                    </span>
-                  )}
-                </>
-              )}
-            </Link>
+                    />
+                    {!collapsed && (
+                      <>
+                        <span className="truncate flex-1">{item.name}</span>
+                        {(() => {
+                          const badge = item.badgeKey ? dynamicBadges[item.badgeKey] : item.badgeFallback
+                          if (!badge) return null
+                          return (
+                            <span
+                              className={cn(
+                                'rounded px-1.5 py-0.2 text-[10px] font-semibold',
+                                isActive
+                                  ? 'bg-primary/20 text-primary'
+                                  : 'bg-muted text-muted-foreground'
+                              )}
+                            >
+                              {badge}
+                            </span>
+                          )
+                        })()}
+                      </>
+                    )}
+                  </Link>
+                )
+              })}
+            </div>
           )
         })}
       </nav>
@@ -133,7 +270,7 @@ export function AppSidebar() {
       {/* Collapse Action */}
       <div className="border-t border-sidebar-border p-2">
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={handleToggle}
           className="flex w-full items-center justify-center rounded p-1 text-muted-foreground hover:bg-sidebar-active hover:text-foreground transition-colors"
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >

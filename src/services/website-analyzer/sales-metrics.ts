@@ -1,4 +1,4 @@
-import { prisma } from '@/lib/prisma'
+import { prisma } from '../../lib/prisma'
 import {
   EnvatoSalesData,
   ProductSalesAnalysis,
@@ -8,6 +8,10 @@ import {
   MultiCompetitorSalesComparison,
   CompetitorSalesRow,
   ExtractedProductData,
+  SalesForecastData,
+  SalesActivityEvent,
+  SalesActivityTimelineData,
+  CompetitorSalesActivityComparison,
 } from './types'
 
 /**
@@ -105,6 +109,8 @@ export async function calculateProductSalesAnalysis(
       source_url: url,
       error: 'Sales data unavailable.',
       raw_envato_data: currentData || null,
+      forecast: calculateSalesForecast([], null),
+      sales_activity_timeline: calculateSalesActivityTimeline([], null),
     }
   }
 
@@ -154,6 +160,8 @@ export async function calculateProductSalesAnalysis(
       source_url: url,
       error: null,
       raw_envato_data: currentData || null,
+      forecast: calculateSalesForecast(salesHistory, currentSales),
+      sales_activity_timeline: calculateSalesActivityTimeline(salesHistory, currentSales),
     }
   }
 
@@ -225,6 +233,8 @@ export async function calculateProductSalesAnalysis(
     source_url: url,
     error: null,
     raw_envato_data: currentData || null,
+    forecast: calculateSalesForecast(salesHistory, latestSales),
+    sales_activity_timeline: calculateSalesActivityTimeline(salesHistory, latestSales),
   }
 }
 
@@ -263,6 +273,241 @@ function formatRelativeTime(date: Date): string {
   if (hours < 24) return `${hours} hours ago`
   const days = Math.floor(hours / 24)
   return `${days} days ago`
+}
+
+/**
+ * Formats a millisecond duration into a compact, human-readable interval.
+ */
+export function formatDurationMs(ms: number): string {
+  if (ms <= 0) return '0 mins'
+  const totalMinutes = Math.floor(ms / (1000 * 60))
+  const days = Math.floor(totalMinutes / (60 * 24))
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60)
+  const minutes = totalMinutes % 60
+
+  const parts: string[] = []
+  if (days > 0) parts.push(`${days} day${days > 1 ? 's' : ''}`)
+  if (hours > 0) parts.push(`${hours} hr${hours > 1 ? 's' : ''}`)
+  if (parts.length === 0 || (days === 0 && minutes > 0)) {
+    parts.push(`${minutes} min${minutes > 1 ? 's' : ''}`)
+  }
+  return parts.slice(0, 2).join(' ')
+}
+
+/**
+ * Calculates deterministic sales activity timeline from historical sales snapshots.
+ * Only builds events for observed sales increases, never fabricating timestamps.
+ */
+export function calculateSalesActivityTimeline(
+  salesHistory: SalesSnapshotItem[],
+  currentSales: number | null
+): SalesActivityTimelineData {
+  if (!salesHistory || salesHistory.length === 0) {
+    return {
+      has_enough_history: false,
+      insufficient_reason: 'Insufficient sales history: no snapshot observations recorded yet.',
+      total_observed_events: 0,
+      last_observed_activity: null,
+      previous_observed_activity: null,
+      interval_between_last_two: null,
+      average_observed_interval: null,
+      activity_trend: 'insufficient_data',
+      activity_trend_label: 'Insufficient sales history',
+      activity_trend_reason: 'Awaiting snapshot history to detect sales activity.',
+      events: [],
+    }
+  }
+
+  // Filter valid snapshots that have valid total_sales and sort chronologically
+  const valid = salesHistory
+    .filter((s) => typeof s.total_sales === 'number' && s.total_sales !== null)
+    .sort((a, b) => new Date(a.collected_at).getTime() - new Date(b.collected_at).getTime())
+
+  if (valid.length === 0) {
+    return {
+      has_enough_history: false,
+      insufficient_reason: 'Insufficient sales history: no valid sales figures recorded.',
+      total_observed_events: 0,
+      last_observed_activity: null,
+      previous_observed_activity: null,
+      interval_between_last_two: null,
+      average_observed_interval: null,
+      activity_trend: 'insufficient_data',
+      activity_trend_label: 'Insufficient sales history',
+      activity_trend_reason: 'No numerical sales data in recorded snapshots.',
+      events: [],
+    }
+  }
+
+  // Walk through snapshots to extract observed sales increase events
+  const events: SalesActivityEvent[] = []
+
+  for (let i = 1; i < valid.length; i++) {
+    const curr = valid[i]
+    const prev = valid[i - 1]
+    const diff = (curr.total_sales ?? 0) - (prev.total_sales ?? 0)
+
+    if (diff > 0) {
+      const currTime = new Date(curr.collected_at).getTime()
+      let intervalMs: number | null = null
+      let intervalFormatted: string | null = null
+      let velocityPerDay: number | null = null
+
+      if (events.length > 0) {
+        // Interval from prior observed increase
+        const prevEventTime = new Date(events[events.length - 1].timestamp).getTime()
+        intervalMs = Math.max(0, currTime - prevEventTime)
+        intervalFormatted = formatDurationMs(intervalMs)
+        const days = Math.max(intervalMs / (1000 * 60 * 60 * 24), 0.001)
+        velocityPerDay = Math.round((diff / days) * 100) / 100
+      } else {
+        // First observed increase: interval from initial baseline snapshot
+        const baselineTime = new Date(valid[0].collected_at).getTime()
+        intervalMs = Math.max(0, currTime - baselineTime)
+        intervalFormatted = `${formatDurationMs(intervalMs)} since baseline`
+        const days = Math.max(intervalMs / (1000 * 60 * 60 * 24), 0.001)
+        velocityPerDay = Math.round((diff / days) * 100) / 100
+      }
+
+      const dateObj = new Date(curr.collected_at)
+      events.push({
+        id: curr.id,
+        timestamp: curr.collected_at,
+        formattedDate: dateObj.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        relativeTime: formatRelativeTime(dateObj),
+        salesGained: diff,
+        newTotalSales: curr.total_sales!,
+        previousTotalSales: prev.total_sales,
+        intervalFromPreviousMs: intervalMs,
+        intervalFromPreviousFormatted: intervalFormatted,
+        velocityPerDay,
+        price: curr.price,
+        note: 'Observed sales increase',
+      })
+    }
+  }
+
+  // Case 0: No observed increase in history
+  if (events.length === 0) {
+    return {
+      has_enough_history: false,
+      insufficient_reason: 'Insufficient sales history: no sales increases observed across recorded snapshots yet.',
+      total_observed_events: 0,
+      last_observed_activity: null,
+      previous_observed_activity: null,
+      interval_between_last_two: null,
+      average_observed_interval: null,
+      activity_trend: 'insufficient_data',
+      activity_trend_label: 'No increases observed',
+      activity_trend_reason: `Stable sales volume observed across ${valid.length} snapshots without recorded changes.`,
+      events: [],
+    }
+  }
+
+  // Case 1: Exactly 1 observed increase
+  if (events.length === 1) {
+    return {
+      has_enough_history: false,
+      insufficient_reason: 'Insufficient sales history: 1 sales increase observed. At least 2 observed increases are required to measure intervals and trend.',
+      total_observed_events: 1,
+      last_observed_activity: events[0],
+      previous_observed_activity: null,
+      interval_between_last_two: null,
+      average_observed_interval: null,
+      activity_trend: 'insufficient_data',
+      activity_trend_label: 'Baseline established',
+      activity_trend_reason: 'Single sales increase observed. Awaiting further activity to establish interval metrics.',
+      events,
+    }
+  }
+
+  // Case 2: >= 2 observed increases
+  const lastActivity = events[events.length - 1]
+  const prevActivity = events[events.length - 2]
+
+  const lastMs = new Date(lastActivity.timestamp).getTime()
+  const prevMs = new Date(prevActivity.timestamp).getTime()
+  const msBetweenLastTwo = Math.max(0, lastMs - prevMs)
+  const daysBetweenLastTwo = Math.round((msBetweenLastTwo / (1000 * 60 * 60 * 24)) * 10) / 10
+
+  const intervalBetweenLastTwo = {
+    ms: msBetweenLastTwo,
+    formatted: formatDurationMs(msBetweenLastTwo),
+    days: daysBetweenLastTwo,
+  }
+
+  // Calculate intervals between all consecutive events
+  const consecutiveIntervalsMs: number[] = []
+  for (let k = 1; k < events.length; k++) {
+    const tCurr = new Date(events[k].timestamp).getTime()
+    const tPrev = new Date(events[k - 1].timestamp).getTime()
+    consecutiveIntervalsMs.push(Math.max(0, tCurr - tPrev))
+  }
+
+  let averageObservedInterval: SalesActivityTimelineData['average_observed_interval'] = null
+  let activityTrend: SalesActivityTimelineData['activity_trend'] = 'stable'
+  let activityTrendLabel = 'Stable activity'
+  let activityTrendReason = 'Observed interval consistent with recent monitoring cadence.'
+
+  if (consecutiveIntervalsMs.length >= 2) {
+    const totalMs = consecutiveIntervalsMs.reduce((acc, v) => acc + v, 0)
+    const avgMs = Math.round(totalMs / consecutiveIntervalsMs.length)
+    averageObservedInterval = {
+      ms: avgMs,
+      formatted: formatDurationMs(avgMs),
+      days: Math.round((avgMs / (1000 * 60 * 60 * 24)) * 10) / 10,
+    }
+
+    const recentInt = consecutiveIntervalsMs[consecutiveIntervalsMs.length - 1]
+    const priorInt = consecutiveIntervalsMs[consecutiveIntervalsMs.length - 2]
+
+    if (recentInt < priorInt * 0.8) {
+      activityTrend = 'accelerating'
+      activityTrendLabel = 'Accelerating'
+      const pctFaster = Math.round(((priorInt - recentInt) / Math.max(priorInt, 1)) * 100)
+      activityTrendReason = `Cadence increased: time between sales narrowed from ${formatDurationMs(priorInt)} to ${formatDurationMs(recentInt)} (${pctFaster}% faster).`
+    } else if (recentInt > priorInt * 1.2) {
+      activityTrend = 'slowing'
+      activityTrendLabel = 'Slowing'
+      activityTrendReason = `Cadence widened: time between sales extended from ${formatDurationMs(priorInt)} to ${formatDurationMs(recentInt)}.`
+    } else {
+      activityTrend = 'stable'
+      activityTrendLabel = 'Stable'
+      activityTrendReason = `Consistent cadence: ${formatDurationMs(recentInt)} between recent observed increases vs prior ${formatDurationMs(priorInt)}.`
+    }
+  } else {
+    // Exactly 1 interval between events
+    const singleInt = consecutiveIntervalsMs[0]
+    const timeSinceLast = Date.now() - lastMs
+    if (timeSinceLast > singleInt * 2.5) {
+      activityTrend = 'slowing'
+      activityTrendLabel = 'Cooling'
+      activityTrendReason = `Time elapsed since last activity (${formatDurationMs(timeSinceLast)}) exceeds prior observed interval (${formatDurationMs(singleInt)}).`
+    } else {
+      activityTrend = 'stable'
+      activityTrendLabel = 'Steady activity'
+      activityTrendReason = `Observed interval between sales is ${formatDurationMs(singleInt)}.`
+    }
+  }
+
+  return {
+    has_enough_history: true,
+    total_observed_events: events.length,
+    last_observed_activity: lastActivity,
+    previous_observed_activity: prevActivity,
+    interval_between_last_two: intervalBetweenLastTwo,
+    average_observed_interval: averageObservedInterval,
+    activity_trend: activityTrend,
+    activity_trend_label: activityTrendLabel,
+    activity_trend_reason: activityTrendReason,
+    events,
+  }
 }
 
 /**
@@ -439,6 +684,20 @@ export function compareSalesData(
     })
   }
 
+  // Observation 6: Activity Frequency Comparison
+  const activityComparison = compareCompetitorActivity(mySales, compSales)
+  if (activityComparison.has_enough_history) {
+    observations.push({
+      id: 'obs_activity_frequency',
+      title: 'Observed sales activity frequency comparison',
+      reason: 'Comparing the frequency of verified sales increases reveals current market momentum and buyer acquisition cadence.',
+      supporting_data: activityComparison.comparison_insight,
+      source_url: compSales.source_url,
+      confidence_level: 'high',
+      date_generated: today,
+    })
+  }
+
   return {
     my_total_sales: myTotal,
     competitor_total_sales: compTotal,
@@ -451,6 +710,52 @@ export function compareSalesData(
     rating_count_comparison: ratingCountComp,
     last_update_comparison: lastUpdateComp,
     observations,
+    activity_comparisons: [activityComparison],
+  }
+}
+
+/**
+ * Compares observed sales activity between target SaaS and a competitor.
+ */
+export function compareCompetitorActivity(
+  mySales: ProductSalesAnalysis,
+  compSales: ProductSalesAnalysis
+): CompetitorSalesActivityComparison {
+  const myTimeline = mySales.sales_activity_timeline
+  const compTimeline = compSales.sales_activity_timeline
+  const compName = compSales.raw_envato_data?.product_name || 'Competitor Product'
+  const myCount = myTimeline?.total_observed_events ?? 0
+  const compCount = compTimeline?.total_observed_events ?? 0
+
+  const myAvg = myTimeline?.average_observed_interval?.formatted || myTimeline?.interval_between_last_two?.formatted || null
+  const compAvg = compTimeline?.average_observed_interval?.formatted || compTimeline?.interval_between_last_two?.formatted || null
+
+  const hasHistory = Boolean(
+    (myTimeline && myTimeline.total_observed_events > 0) ||
+    (compTimeline && compTimeline.total_observed_events > 0)
+  )
+
+  let insight = 'Insufficient sales history for comparative activity analysis.'
+
+  if (!hasHistory) {
+    insight = 'Insufficient sales history: monitoring ongoing to record observed sales increases across products.'
+  } else if (compCount > myCount) {
+    insight = `${compName} shows more frequent observed sales increases (${compCount} observed increase${compCount === 1 ? '' : 's'}) than your product (${myCount} observed increase${myCount === 1 ? '' : 's'}) over the available observation period.`
+  } else if (myCount > compCount) {
+    insight = `Your product shows more frequent observed sales increases (${myCount} observed increase${myCount === 1 ? '' : 's'}) than ${compName} (${compCount} observed increase${compCount === 1 ? '' : 's'}) over the available observation period.`
+  } else {
+    insight = `Comparable sales activity frequency: both products recorded ${myCount} observed sales increase${myCount === 1 ? '' : 's'} over the available observation period.`
+  }
+
+  return {
+    competitor_url: compSales.source_url,
+    competitor_name: compName,
+    target_observed_increases: myCount,
+    competitor_observed_increases: compCount,
+    target_average_interval: myAvg,
+    competitor_average_interval: compAvg,
+    comparison_insight: insight,
+    has_enough_history: hasHistory,
   }
 }
 
@@ -508,6 +813,7 @@ export function compareMultiSalesData(
       latest_observation_time: compSales.sales_history[0]?.collected_at || new Date().toISOString(),
       has_historical_snapshots: hasSnapshots,
       salesAnalysis: compSales,
+      activity_timeline: compSales.sales_activity_timeline || null,
     }
   })
 
@@ -519,10 +825,118 @@ export function compareMultiSalesData(
     overall_observations.push(...compData.observations)
   }
 
+  // Activity comparisons across all competitors
+  const activity_comparisons: CompetitorSalesActivityComparison[] = []
+  if (mySales) {
+    competitorSalesList.forEach((compSales) => {
+      activity_comparisons.push(compareCompetitorActivity(mySales, compSales))
+    })
+  }
+
   return {
     my_sales: mySales,
     competitor_rows,
     overall_observations,
+    activity_comparisons,
   }
 }
+
+/**
+ * Calculates a deterministic trend sales forecast based on historical sales snapshots.
+ * Adheres strictly to the requirement: if snapshots < 7 daily observations, returns is_available: false
+ * with an honest explanatory reason, never generating unbacked numbers.
+ */
+export function calculateSalesForecast(
+  history: SalesSnapshotItem[],
+  currentSales: number | null
+): SalesForecastData {
+  if (currentSales === null || !history || history.length < 7) {
+    return {
+      is_available: false,
+      historical_data_points: history?.length || 0,
+      minimum_points_required: 7,
+      model_type: 'Insufficient Data',
+      prediction_period_days: 7,
+      forecasted_sales_low: null,
+      forecasted_sales_expected: null,
+      forecasted_sales_high: null,
+      projected_units_gain: null,
+      confidence_score: null,
+      confidence_label: 'Insufficient Data',
+      reason: `Forecasting requires at least 7 historical snapshot observations (currently ${history?.length || 0} recorded). Daily automated monitor collects snapshots over time to produce validated predictions.`,
+    }
+  }
+
+  // Filter valid snapshots with sales numbers
+  const valid = history
+    .filter((h) => typeof h.total_sales === 'number' && h.total_sales !== null)
+    .sort((a, b) => new Date(a.collected_at).getTime() - new Date(b.collected_at).getTime())
+
+  if (valid.length < 7) {
+    return {
+      is_available: false,
+      historical_data_points: valid.length,
+      minimum_points_required: 7,
+      model_type: 'Insufficient Data',
+      prediction_period_days: 7,
+      forecasted_sales_low: null,
+      forecasted_sales_expected: null,
+      forecasted_sales_high: null,
+      projected_units_gain: null,
+      confidence_score: null,
+      confidence_label: 'Insufficient Data',
+      reason: `Forecasting requires at least 7 valid numerical data points (currently ${valid.length} valid snapshots).`,
+    }
+  }
+
+  // Calculate daily velocity across the timeline
+  const first = valid[0]
+  const last = valid[valid.length - 1]
+  const timeSpanDays = Math.max(
+    (new Date(last.collected_at).getTime() - new Date(first.collected_at).getTime()) / (1000 * 60 * 60 * 24),
+    0.5
+  )
+  const salesGained = Math.max((last.total_sales || 0) - (first.total_sales || 0), 0)
+  const dailyVelocity = salesGained / timeSpanDays
+
+  // Recent 7-point window velocity
+  const recentWindow = valid.slice(-7)
+  const recentSpanDays = Math.max(
+    (new Date(recentWindow[recentWindow.length - 1].collected_at).getTime() - new Date(recentWindow[0].collected_at).getTime()) / (1000 * 60 * 60 * 24),
+    0.5
+  )
+  const recentGained = Math.max((recentWindow[recentWindow.length - 1].total_sales || 0) - (recentWindow[0].total_sales || 0), 0)
+  const recentVelocity = recentGained / recentSpanDays
+
+  // Blended weighted daily run rate (60% recent velocity, 40% overall velocity)
+  const blendedDailyRunRate = recentVelocity * 0.6 + dailyVelocity * 0.4
+  const projected7DayGain = Math.round(blendedDailyRunRate * 7)
+
+  // Prediction intervals
+  const expectedForecast = currentSales + projected7DayGain
+  const varianceMargin = Math.max(Math.round(projected7DayGain * 0.25), 1)
+  const lowForecast = Math.max(currentSales, expectedForecast - varianceMargin)
+  const highForecast = expectedForecast + varianceMargin
+
+  // Confidence estimation based on data volume and stability
+  const sampleCountFactor = Math.min(valid.length / 30, 1.0)
+  const confidenceScore = Math.round((0.65 + sampleCountFactor * 0.25) * 100) / 100
+  const confidenceLabel: 'High' | 'Medium' | 'Low' =
+    confidenceScore >= 0.85 ? 'High' : confidenceScore >= 0.7 ? 'Medium' : 'Low'
+
+  return {
+    is_available: true,
+    historical_data_points: valid.length,
+    minimum_points_required: 7,
+    model_type: 'Deterministic Trend Extrapolation (Baseline)',
+    prediction_period_days: 7,
+    forecasted_sales_low: lowForecast,
+    forecasted_sales_expected: expectedForecast,
+    forecasted_sales_high: highForecast,
+    projected_units_gain: projected7DayGain,
+    confidence_score: confidenceScore,
+    confidence_label: confidenceLabel,
+  }
+}
+
 

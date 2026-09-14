@@ -4,6 +4,8 @@ export interface PricingPlanExtracted {
   priceAnnual: string
   features: string[]
   isPopular?: boolean
+  price?: number | string
+  interval?: string
 }
 
 export interface DiscoveredPage {
@@ -32,11 +34,21 @@ export interface EnvatoSalesData {
   thumbnail_url?: string | null
 }
 
+export interface DataProvenance {
+  source: string
+  source_url: string
+  collected_at: string
+  status: 'success' | 'partial' | 'failed' | 'unavailable'
+  connector?: string
+  message?: string
+}
+
 export interface ExtractedProductData {
   url: string
   normalizedUrl: string
   productName: string
   websiteTitle: string
+  title?: string
   description: string
   category: string
   targetCustomers: string[]
@@ -53,7 +65,7 @@ export interface ExtractedProductData {
   changelogLink: string
   blogLink: string
   docsLink: string
-  testimonials: Array<{ quote: string; author?: string }>
+  testimonials: Array<{ quote: string; author?: string; role?: string } | string>
   discoveredPages: DiscoveredPage[]
   collectionErrors: string[]
   analyzedAt: string
@@ -61,6 +73,19 @@ export interface ExtractedProductData {
   thumbnailUrl?: string | null
   headings?: { h1: string[]; h2: string[]; h3: string[] }
   tags?: string[]
+  provenance?: DataProvenance
+  imageAltsCount?: number
+  totalImagesCount?: number
+  canonicalUrl?: string | null
+  hasStructuredData?: boolean
+  structuredDataTypes?: string[]
+  comments?: Array<{
+    author_name: string
+    comment_text: string
+    comment_date: string
+    comment_url: string | null
+    rating: number | null
+  }>
 }
 
 export interface ProductComparison {
@@ -148,6 +173,71 @@ export interface ProductSalesAnalysis {
   source_url: string
   error: string | null
   raw_envato_data?: EnvatoSalesData | null
+  forecast?: SalesForecastData | null
+  sales_activity_timeline?: SalesActivityTimelineData | null
+}
+
+export interface SalesActivityEvent {
+  id: string
+  timestamp: string // ISO date string of snapshot
+  formattedDate: string // e.g. "Sep 11, 2026, 11:05 AM"
+  relativeTime: string // e.g. "3 days ago"
+  salesGained: number // units gained since previous observed event, e.g. 1
+  newTotalSales: number // e.g. 296
+  previousTotalSales: number | null
+  intervalFromPreviousMs: number | null
+  intervalFromPreviousFormatted: string | null // e.g. "2 days 1 hour"
+  velocityPerDay: number | null
+  price: string | null
+  note: string // e.g. "Observed sales increase"
+}
+
+export interface SalesActivityTimelineData {
+  has_enough_history: boolean
+  insufficient_reason?: string
+  total_observed_events: number
+  last_observed_activity: SalesActivityEvent | null
+  previous_observed_activity: SalesActivityEvent | null
+  interval_between_last_two: {
+    ms: number
+    formatted: string
+    days: number
+  } | null
+  average_observed_interval: {
+    ms: number
+    formatted: string
+    days: number
+  } | null
+  activity_trend: 'accelerating' | 'stable' | 'slowing' | 'insufficient_data'
+  activity_trend_label: string
+  activity_trend_reason: string
+  events: SalesActivityEvent[]
+}
+
+export interface CompetitorSalesActivityComparison {
+  competitor_url: string
+  competitor_name: string
+  target_observed_increases: number
+  competitor_observed_increases: number
+  target_average_interval: string | null
+  competitor_average_interval: string | null
+  comparison_insight: string
+  has_enough_history: boolean
+}
+
+export interface SalesForecastData {
+  is_available: boolean
+  historical_data_points: number
+  minimum_points_required: number
+  model_type: 'Deterministic Trend Extrapolation (Baseline)' | 'Insufficient Data'
+  prediction_period_days: number
+  forecasted_sales_low: number | null
+  forecasted_sales_expected: number | null
+  forecasted_sales_high: number | null
+  projected_units_gain: number | null
+  confidence_score: number | null // 0.00 to 1.00
+  confidence_label: 'High' | 'Medium' | 'Low' | 'Insufficient Data'
+  reason?: string
 }
 
 export interface SalesObservation {
@@ -172,6 +262,7 @@ export interface SalesComparisonData {
   rating_count_comparison: string
   last_update_comparison: string
   observations: SalesObservation[]
+  activity_comparisons?: CompetitorSalesActivityComparison[]
 }
 
 export interface CompetitorSalesRow {
@@ -191,12 +282,14 @@ export interface CompetitorSalesRow {
   latest_observation_time: string
   has_historical_snapshots: boolean
   salesAnalysis: ProductSalesAnalysis
+  activity_timeline?: SalesActivityTimelineData | null
 }
 
 export interface MultiCompetitorSalesComparison {
   my_sales: ProductSalesAnalysis | null
   competitor_rows: CompetitorSalesRow[]
   overall_observations: SalesObservation[]
+  activity_comparisons?: CompetitorSalesActivityComparison[]
 }
 
 // ─────────────────────────────────────────────
@@ -225,6 +318,11 @@ export interface SeoOnPageAudit {
   tags: string[]
   category_relevance: string
   image_alts_count: number
+  total_images_count?: number
+  canonical_url?: string | null
+  canonical_status?: 'valid' | 'missing' | 'mismatched'
+  has_structured_data?: boolean
+  structured_data_types?: string[]
   links: {
     has_demo: boolean
     has_docs: boolean
@@ -272,8 +370,77 @@ export interface SeoRecommendationItem {
   suggested_content: string | string[]
 }
 
+export interface ObservedTopic {
+  topic: string
+  normalizedTopic: string
+  evidenceCount: number
+  locations: string[]
+  semanticGroup: string
+  inMyProduct: boolean
+  inCompetitors: boolean
+  competitorNames: string[]
+  evidenceSnippet?: string
+}
+
+export interface CompetitorTopicGap {
+  topic: string
+  evidence: string
+  affectedCompetitors: string[]
+  strategicImpact: string
+  recommendedAction: string
+}
+
+export interface CompetitorSeoProfile {
+  competitorName: string
+  competitorUrl: string
+  topicCount: number
+  titleHeadingCoverage: string
+  contentDepthSignals: {
+    wordCount: number
+    featureCount: number
+    headingCount: number
+  }
+  technicalIssues: string[]
+  uniqueTopics: string[]
+  missingOnMyProduct: string[]
+  whyCompetitorIsStronger?: string
+  evidenceSnippet?: string
+}
+
+export interface SeoContentCoverage {
+  titleTopicCoverage: { covered: boolean; matchedTopics: string[] }
+  metaDescriptionCoverage: { covered: boolean; matchedTopics: string[]; charCount: number }
+  headingCoverage: { h1Covered: boolean; h2TopicsCount: number; matchedTopics: string[] }
+  bodyTopicCoverage: { topicMentionsCount: number; densityRating: 'High' | 'Moderate' | 'Low' }
+  imageAltCoverage: { total: number; withAlt: number; percentage: number }
+  structuredDataPresence: { present: boolean; types: string[] }
+  canonicalPresence: { present: boolean; status: 'valid' | 'missing' | 'mismatched' }
+  indexabilityStatus: { indexable: boolean; notes: string }
+  internalLinkSignals: { discoveredPagesCount: number; hasDemo: boolean; hasDocs: boolean }
+}
+
+export interface CompetitiveSeoInsight {
+  competitorName: string
+  whatCompetitorDoesBetter: string
+  evidence: string
+  whyItMatters: string
+  recommendedAction: string
+  priority: 'critical' | 'high' | 'medium' | 'low'
+}
+
+export interface PrioritizedSeoAction {
+  id: string
+  action: string
+  evidence: string
+  expectedObjective: string
+  priority: 'critical' | 'high' | 'medium' | 'low'
+  category: 'technical' | 'content_gap' | 'metadata'
+}
+
 export interface SeoAnalysisResult {
   audits: Record<string, SeoOnPageAudit>
+  target_onpage_audit?: SeoOnPageAudit
+  competitor_onpage_audit?: SeoOnPageAudit
   target_keywords: string[]
   suggested_keywords: string[]
   comparison_table: SeoKeywordComparisonRow[]
@@ -284,6 +451,23 @@ export interface SeoAnalysisResult {
     engine: string
     device: string
     source: string
+  }
+  // Competitive SEO Analyser Extensions
+  observed_topics?: ObservedTopic[]
+  my_topics?: string[]
+  competitor_topics?: string[]
+  shared_topics?: string[]
+  competitor_only_topics?: CompetitorTopicGap[]
+  my_only_topics?: string[]
+  content_coverage?: SeoContentCoverage
+  competitor_profiles?: CompetitorSeoProfile[]
+  competitive_insights?: CompetitiveSeoInsight[]
+  prioritized_actions?: PrioritizedSeoAction[]
+  ranking_data_status?: string
+  keyword_matrix?: {
+    top_target_keywords: string[]
+    shared_keywords: string[]
+    competitor_exclusive_keywords: string[]
   }
 }
 
@@ -326,6 +510,9 @@ export interface RecurringComplaintGroup {
   feedback_type?: 'complaint' | 'suggestion' | 'feature_request' | 'improvement' | 'inquiry'
   is_suggestive?: boolean
   comments?: PublicComment[]
+  semantic_issue?: string
+  supporting_comments?: string[]
+  similarity_score?: number
 }
 
 export interface PublicComment {
@@ -355,6 +542,9 @@ export interface PublicComment {
     | 'integration_request'
     | 'workflow_customization'
     | 'general_question'
+    | 'hardware_defect'
+    | 'multimedia_camera'
+    | 'pricing_value'
   topic_label: string
   severity: 'low' | 'medium' | 'high' | 'critical'
   detected_issue: string
@@ -365,6 +555,8 @@ export interface PublicComment {
   feedback_type?: 'complaint' | 'suggestion' | 'feature_request' | 'improvement' | 'inquiry'
   is_suggestive?: boolean
   collected_at: string
+  semantic_cluster_id?: string
+  semantic_issue?: string
 }
 
 export interface CompetitorCommentsSummary {
@@ -377,7 +569,7 @@ export interface CompetitorCommentsSummary {
   neutral_count: number
   suggestive_count?: number
   comments_unavailable: boolean
-  common_complaints: Array<{ topic: string; count: number; sample: string; comments?: PublicComment[] }>
+  common_complaints: Array<{ topic: string; count: number; sample: string; comments?: PublicComment[]; semantic_issue?: string }>
   suggestions?: Array<{ topic: string; count: number; sample: string; comments?: PublicComment[] }>
   requested_features: string[]
   recent_negative_count: number
@@ -404,6 +596,13 @@ export interface CommentsAnalysisResult {
   unresolved_count: number
   unavailable_competitors: string[]
   sales_comment_correlation?: SalesCommentCorrelation | null
+  all_comments?: PublicComment[]
+  positive_count?: number
+  negative_count?: number
+  neutral_count?: number
+  clusters?: any[]
+  topComplaints?: any[]
+  competitor_summaries?: any[]
 }
 
 // ─────────────────────────────────────────────
@@ -437,6 +636,17 @@ export interface OpportunityRecord {
     | 'Converted'
     | 'Closed'
   created_at: string
+  // Normalized & UI Compatibility Fields
+  problem_detected?: string
+  evidence_quote?: string
+  affected_competitor?: string
+  expected_outcome?: string
+  opportunity_score?: number
+  publicComment?: string
+  matchingProductFeature?: string
+  suggestedOutreach?: string
+  opportunityScore?: number
+  targetCompetitor?: string
 }
 
 export interface CompetitorInsightItem {
@@ -485,4 +695,6 @@ export interface AnalysisResponseData {
   activities?: any[] | null
   last_activity_check_at?: string | null
   next_activity_check_at?: string | null
+  last_refreshed_at?: string | null
+  next_refresh_at?: string | null
 }

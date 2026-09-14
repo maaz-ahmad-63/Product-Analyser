@@ -10,11 +10,58 @@ import {
  */
 function findVerifiedMatchingFeature(
   complaintCategory: string,
-  myProduct: ExtractedProductData
+  myProduct: ExtractedProductData,
+  semanticIssue?: string
 ): { feature: string; whyRelevant: string } | null {
   const myFeatures = myProduct.features || []
   const myDesc = (myProduct.description || '').toLowerCase()
   const myTitle = (myProduct.websiteTitle || myProduct.productName || '').toLowerCase()
+
+  // 1. Prioritize Direct Semantic Entity Matching from the Complaint Issue Label
+  if (semanticIssue) {
+    const issueLower = semanticIssue.toLowerCase()
+    const NON_FEATURE_WORDS = new Set([
+      'issue',
+      'problem',
+      'bug',
+      'error',
+      'fails',
+      'failing',
+      'failure',
+      'corrupt',
+      'corruption',
+      'corrupted',
+      'silent',
+      'missing',
+      'broken',
+      'lack',
+      'lacks',
+      'not',
+      'working',
+      'with',
+      'after',
+      'from',
+      'when',
+      'does',
+      'tool',
+      'system',
+      'request',
+      'complaint',
+    ])
+    const substantiveKeywords = issueLower
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 4 && !NON_FEATURE_WORDS.has(w))
+
+    for (const f of myFeatures) {
+      const fLower = f.toLowerCase()
+      if (substantiveKeywords.some((kw) => fLower.includes(kw))) {
+        return {
+          feature: f,
+          whyRelevant: `Our product explicitly includes verified support for "${f}", directly addressing the ${semanticIssue} experienced by competitor customers.`,
+        }
+      }
+    }
+  }
 
   const findFeatureMatching = (keywords: string[]): string | null => {
     for (const f of myFeatures) {
@@ -26,9 +73,7 @@ function findVerifiedMatchingFeature(
     return null
   }
 
-  // Handle the 12 standard categories:
-  // 'Installation and setup' | 'Documentation' | 'Bugs and crashes' | 'Support' | 'Compatibility' | 'Performance' | 'Missing features' | 'Payment and licensing' | 'Security' | 'UI/UX' | 'Updates' | 'Integrations'
-
+  // Handle the standard feedback categories:
   if (complaintCategory === 'Installation and setup' || complaintCategory === 'Installation & Setup' || complaintCategory === 'Configuration & Environment') {
     const matched = findFeatureMatching(['install', 'setup', 'docker', 'deploy', 'wizard', 'auto', 'script', 'quick', 'easy'])
     if (matched) {
@@ -126,12 +171,6 @@ function findVerifiedMatchingFeature(
         whyRelevant: 'Our product offers this capability natively out of the box. This may represent an opportunity to differentiate our product.',
       }
     }
-    if (myFeatures.length > 0) {
-      return {
-        feature: myFeatures[0],
-        whyRelevant: 'Our product offers comprehensive functionality in this domain. This may represent an opportunity to differentiate our product.',
-      }
-    }
     return null
   }
 
@@ -171,17 +210,17 @@ function findVerifiedMatchingFeature(
         whyRelevant: 'Engineered with modern user experience standards and frictionless usability. This may represent an opportunity to differentiate our product.',
       }
     }
-    return {
-      feature: myFeatures.length > 0 ? myFeatures[0] : 'Streamlined User Interface & Workflow Architecture',
-      whyRelevant: 'Designed around modern user experience standards. This may represent an opportunity to differentiate our product.',
-    }
+    return null
   }
 
   if (complaintCategory === 'Updates') {
-    return {
-      feature: 'Active Maintenance & Semantic Versioning Updates',
-      whyRelevant: 'Our release cycle maintains backward compatibility and clear changelogs. This may represent an opportunity to differentiate our product.',
+    if (myProduct.changelogLink && myProduct.changelogLink !== 'Not found on the provided website') {
+      return {
+        feature: 'Active Maintenance & Verified Public Changelog',
+        whyRelevant: 'Our product maintains a verified public changelog and regular update cycle. This may represent an opportunity to differentiate our product.',
+      }
     }
+    return null
   }
 
   if (complaintCategory === 'Integrations' || complaintCategory === 'Integration Request') {
@@ -199,6 +238,42 @@ function findVerifiedMatchingFeature(
       }
     }
     return null
+  }
+
+  if (complaintCategory === 'Hardware, build and defects' || complaintCategory === 'Hardware defect' || complaintCategory === 'Durability') {
+    const matched = findFeatureMatching(['titanium', 'ceramic', 'shield', 'durability', 'battery', 'tested', 'quality', 'warranty', 'a19', 'enclosure'])
+    if (matched) {
+      return {
+        feature: matched,
+        whyRelevant: 'Our product features verified build materials and rigorous quality standards designed to prevent hardware failures and premature degradation.',
+      }
+    }
+    if (myFeatures.length > 0) {
+      return {
+        feature: myFeatures[0],
+        whyRelevant: 'Our product emphasizes verified manufacturing specifications and quality control standards.',
+      }
+    }
+  }
+
+  if (complaintCategory === 'Camera and multimedia' || complaintCategory === 'Camera limitation' || complaintCategory === 'Audio / Speaker') {
+    const matched = findFeatureMatching(['camera', 'lens', 'fusion', 'telephoto', 'portrait', 'speaker', 'audio', 'spatial', 'sound', 'sensor', 'display'])
+    if (matched) {
+      return {
+        feature: matched,
+        whyRelevant: 'Our product provides verified multimedia and imaging capabilities that address competitor camera or acoustic limitations.',
+      }
+    }
+  }
+
+  if (complaintCategory === 'Pricing and value' || complaintCategory === 'Value for money') {
+    const matched = findFeatureMatching(['promotion', 'value', 'storage', 'gb', 'chip', 'all-day', 'battery', 'display', '120hz', 'price'])
+    if (matched) {
+      return {
+        feature: matched,
+        whyRelevant: 'Our product bundles high-end flagship features natively to offer superior price-to-performance value.',
+      }
+    }
   }
 
   return null
@@ -244,27 +319,32 @@ export function detectOpportunitiesFromRecurringComplaints(
 
   for (let i = 0; i < recurringComplaints.length; i++) {
     const complaint = recurringComplaints[i]
+    const issueName = complaint.semantic_issue || complaint.complaint_category
 
-    // Match verified feature in our product
-    const match = findVerifiedMatchingFeature(complaint.complaint_category, myProduct)
+    // Match verified feature in our product (prioritizing semantic issue label)
+    const match = findVerifiedMatchingFeature(
+      complaint.complaint_category,
+      myProduct,
+      complaint.semantic_issue
+    )
     const hasMatchingFeature = match !== null
     const matchingFeature = match ? match.feature : 'No verified matching feature found.'
     const whyRelevant = match
       ? match.whyRelevant
-      : `Recurring issue on ${complaint.competitor_name} (${complaint.mention_count} public mentions), but our listing does not explicitly advertise a verified matching feature.`
+      : `Recurring issue "${issueName}" on ${complaint.competitor_name} (${complaint.mention_count} public mentions), but our listing does not explicitly advertise a verified matching feature.`
 
     // Label value proposition clearly as a possible improvement, not a guaranteed lost sales cause
     const isSug = Boolean(complaint.is_suggestive)
     const valueProposition = match
       ? isSug
-        ? `Customer Demand Opportunity: Highlighting ${matchingFeature} in marketing or docs directly fulfills customer interest in ${complaint.complaint_category.toLowerCase()} identified on ${complaint.competitor_name}. This may represent an opportunity to differentiate our product.`
-        : `Possible improvement: Highlighting ${matchingFeature} in product documentation and marketing materials may attract buyers frustrated with ${complaint.complaint_category.toLowerCase()} on ${complaint.competitor_name}. This may represent an opportunity to differentiate our product.`
+        ? `Customer Demand Opportunity: Highlighting ${matchingFeature} in marketing or docs directly fulfills customer interest in ${issueName.toLowerCase()} identified on ${complaint.competitor_name}. This may represent an opportunity to differentiate our product.`
+        : `Possible improvement: Highlighting ${matchingFeature} in product documentation and marketing materials may attract buyers frustrated with ${issueName.toLowerCase()} on ${complaint.competitor_name}. This may represent an opportunity to differentiate our product.`
       : isSug
-      ? `Feature Demand: Customer suggestion on ${complaint.competitor_name} indicates active market demand for ${complaint.complaint_category.toLowerCase()}.`
-      : `Possible improvement: Evaluating customer demand for ${complaint.complaint_category.toLowerCase()} could represent a potential product enhancement opportunity.`
+      ? `Feature Demand: Customer suggestion on ${complaint.competitor_name} indicates active market demand for ${issueName.toLowerCase()}.`
+      : `Possible improvement: Evaluating customer demand for ${issueName.toLowerCase()} could represent a potential product enhancement opportunity.`
 
     const draftMessage = buildRespectfulDraftMessage(
-      complaint.short_summary,
+      issueName,
       complaint.competitor_name,
       myName,
       match ? match.feature : null,
@@ -277,7 +357,7 @@ export function detectOpportunitiesFromRecurringComplaints(
       competitor_name: complaint.competitor_name,
       comment_url: complaint.comment_url,
       comment_date: complaint.latest_occurrence_date,
-      issue_category: complaint.complaint_category,
+      issue_category: issueName,
       comment_summary: complaint.representative_comment.slice(0, 300),
       why_relevant: whyRelevant,
       matching_feature: matchingFeature,

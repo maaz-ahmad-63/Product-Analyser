@@ -1,4 +1,5 @@
-import { prisma } from '@/lib/prisma'
+import { prisma } from '../../lib/prisma'
+import { connectorRegistry } from '../connectors'
 import { collectWebsiteData, normalizeUrl, fetchProductPublicComments } from './collector'
 import { compareProducts } from './comparator'
 import {
@@ -11,6 +12,7 @@ import { analyzeSeo, HistoricalKeywordRanking } from './seo-analyzer'
 import { analyzeCompetitorComments } from './comments-analyzer'
 import { detectOpportunitiesFromRecurringComplaints } from './opportunity-detector'
 import { generateUnifiedInsights } from './insights-engine'
+import { generateExecutiveBriefing } from './executive-briefing'
 import {
   AnalysisResponseData,
   ExtractedProductData,
@@ -43,7 +45,13 @@ export class WebsiteAnalyzerService {
     competitorRawUrls: string | string[],
     userId?: string | null,
     projectName?: string,
-    targetKeywords: string[] = []
+    targetKeywords: string[] = [],
+    options?: {
+      platform?: string
+      selectedModules?: string[]
+      myProductName?: string
+      tenantId?: string | null
+    }
   ): Promise<AnalysisResponseData> {
     const myUrl = normalizeUrl(myRawUrl)
 
@@ -70,10 +78,14 @@ export class WebsiteAnalyzerService {
     const primaryCompetitorUrl = normalizedComps[0]
     const name = projectName || `${myUrl.replace(/https?:\/\/(www\.)?/, '').split('/')[0]} vs Competitors`
 
-    // Create DB record with status = running and associated userId
+    // Create DB record with status = running and associated userId / tenantId
     const record = await prisma.comparisonAnalysis.create({
       data: {
         userId: userId || null,
+        tenantId: options?.tenantId || null,
+        platform: options?.platform || (myUrl.includes('codecanyon.net') || myUrl.includes('themeforest.net') ? 'envato' : 'generic'),
+        selectedModules: options?.selectedModules || [],
+        myProductName: options?.myProductName || null,
         projectName: name,
         myUrl,
         competitorUrl: primaryCompetitorUrl,
@@ -171,14 +183,16 @@ export class WebsiteAnalyzerService {
       const scrapedCommentsMap: Record<string, any[]> = {}
       await Promise.all(
         competitorsData.map(async (comp) => {
-          if (comp.url.includes('codecanyon.net') || comp.url.includes('themeforest.net') || comp.url.includes('envato.com')) {
+          if (comp.comments && comp.comments.length > 0) {
+            scrapedCommentsMap[comp.url] = comp.comments
+          } else {
             const comments = await fetchProductPublicComments(comp.url)
             scrapedCommentsMap[comp.url] = comments
           }
         })
       )
 
-      const commentsAnalysis: CommentsAnalysisResult = analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
 
       // 6. Opportunity Detection from Recurring or Critical Negative Complaints
       const opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
@@ -226,11 +240,26 @@ export class WebsiteAnalyzerService {
         competitor_product: primaryCompetitor.collectionErrors,
       }
 
-      // 8. Update record in database
+      // 8. Generate Evidence-Grounded Executive Briefing
+      let executiveSummary: string | null = null
+      try {
+        executiveSummary = await generateExecutiveBriefing({
+          myProduct,
+          primaryCompetitor,
+          comparison,
+          commentsSummary: commentsAnalysis.summaries?.find((s) => s.product_url === primaryCompetitorUrl) || commentsAnalysis.summaries?.[0] || null,
+          opportunities,
+        })
+      } catch (err) {
+        console.error('Error generating executive briefing:', err)
+      }
+
+      // 9. Update record in database
       await prisma.comparisonAnalysis.update({
         where: { id: record.id },
         data: {
           status: 'completed',
+          executiveSummary,
           myProduct: JSON.parse(JSON.stringify(myProduct)),
           competitorProduct: JSON.parse(JSON.stringify(primaryCompetitor)),
           competitorsData: JSON.parse(JSON.stringify(competitorsData)),
@@ -346,33 +375,65 @@ export class WebsiteAnalyzerService {
       }
     }
 
-    const dbOpportunities = record.opportunities || []
-    const opportunities: OpportunityRecord[] =
-      dbOpportunities.length > 0
-        ? dbOpportunities.map((o) => {
-            const hasMatch = o.relevantFeature !== null && o.relevantFeature !== 'No verified matching feature found.'
-            return {
-              id: o.id,
-              competitor_url: o.competitorUrl,
-              competitor_name:
-                competitorsData.find((c) => c.url === o.competitorUrl)?.productName || 'Competitor',
-              comment_url: o.commentUrl,
-              comment_date: o.commentDate,
-              issue_category: o.issueCategory,
-              comment_summary: o.commentSummary,
-              why_relevant: o.relevantFeature || '',
-              matching_feature: o.relevantFeature || 'No verified matching feature found.',
-              has_matching_feature: hasMatch,
-              value_proposition: o.valueProposition || '',
-              draft_message: o.draftMessage || '',
-              mention_count: (o as any).mentionCount || 1,
-              severity: ((o as any).severity as any) || 'medium',
-              confidence_level: (o as any).severity === 'critical' ? 'High' : 'Medium',
-              status: o.status as any,
-              created_at: o.createdAt.toISOString(),
-            }
-          })
-        : ((record.opportunitiesData as unknown as OpportunityRecord[]) || [])
+    const rawOppData = (record.opportunitiesData as unknown as any[]) || []
+    const dbOpportunities = (record.opportunities as any[]) || []
+    
+    // Choose the richer dataset (opportunitiesData contains full semantic text, quotes, and draft pitches)
+    const baseOpportunities = rawOppData.length >= dbOpportunities.length && rawOppData.length > 0
+      ? rawOppData
+      : dbOpportunities.length > 0
+      ? dbOpportunities
+      : rawOppData
+
+    const opportunities: OpportunityRecord[] = baseOpportunities.map((o: any, idx: number) => {
+      const issueCategory = o.issue_category || o.issueCategory || 'Customer Friction Point'
+      const commentQuote = o.comment_summary || o.commentSummary || o.publicComment || o.evidence || ''
+      const competitorName = o.competitor_name || o.competitorName || competitorsData.find((c) => c.url === (o.competitor_url || o.competitorUrl))?.productName || 'Competitor'
+      const matchingFeature = o.matching_feature || o.matchingProductFeature || o.relevantFeature || ''
+      const hasMatch = Boolean(
+        o.has_matching_feature ??
+        (matchingFeature && matchingFeature !== 'No verified matching feature found.')
+      )
+      const draftMessage = o.draft_message || o.draftMessage || o.suggestedOutreach || ''
+      const mentionCount = o.mention_count || o.mentionCount || 1
+      const severity = (o.severity as any) || 'medium'
+      const confidenceLevel = o.confidence_level || (hasMatch ? 'High' : mentionCount >= 3 ? 'Medium' : 'Low')
+      const calculatedScore = Math.round((hasMatch ? 0.85 : 0.70 + Math.min(mentionCount * 0.02, 0.15)) * 100) / 100
+
+      return {
+        id: o.id || `opp-${idx}`,
+        competitor_url: o.competitor_url || o.competitorUrl || '',
+        competitor_name: competitorName,
+        comment_url: o.comment_url || o.commentUrl || null,
+        comment_date: o.comment_date || o.commentDate || null,
+        issue_category: issueCategory,
+        comment_summary: commentQuote,
+        why_relevant: o.why_relevant || o.whyRelevant || (hasMatch ? `Directly solved by our "${matchingFeature}"` : 'Market demand signal'),
+        matching_feature: matchingFeature || 'No verified matching feature found.',
+        has_matching_feature: hasMatch,
+        value_proposition: o.value_proposition || o.valueProposition || '',
+        draft_message: draftMessage,
+        mention_count: mentionCount,
+        severity,
+        confidence_level: confidenceLevel,
+        status: o.status || 'New',
+        created_at: o.created_at || (o.createdAt ? new Date(o.createdAt).toISOString() : new Date().toISOString()),
+        // Normalized Result-Oriented Fields
+        problem_detected: issueCategory,
+        evidence_quote: commentQuote,
+        affected_competitor: competitorName,
+        expected_outcome: hasMatch
+          ? 'Differentiate with verified capability and reduce customer switching hesitation.'
+          : 'Evaluate customer demand for future product roadmap enhancement.',
+        opportunity_score: calculatedScore,
+        // Legacy camelCase Compatibility
+        publicComment: commentQuote,
+        matchingProductFeature: hasMatch ? matchingFeature : '',
+        suggestedOutreach: draftMessage,
+        opportunityScore: calculatedScore,
+        targetCompetitor: competitorName,
+      }
+    })
 
     return {
       analysis_id: record.id,
@@ -401,6 +462,8 @@ export class WebsiteAnalyzerService {
       activities: record.activities || [],
       last_activity_check_at: record.lastActivityCheckAt?.toISOString() || null,
       next_activity_check_at: record.nextActivityCheckAt?.toISOString() || null,
+      last_refreshed_at: record.lastRefreshedAt?.toISOString() || null,
+      next_refresh_at: record.nextRefreshAt?.toISOString() || null,
     }
   }
 
@@ -456,7 +519,7 @@ export class WebsiteAnalyzerService {
       unresolved_count: 0,
       unavailable_competitors: [],
     }
-    const newCommentsResult = analyzeCompetitorComments([newCompData], { [newUrl]: scrapedComments })
+    const newCommentsResult = await analyzeCompetitorComments([newCompData], { [newUrl]: scrapedComments })
 
     const mergedCommentsAnalysis: CommentsAnalysisResult = {
       summaries: [...(existingCommentsAnalysis.summaries || []), ...newCommentsResult.summaries],
@@ -608,6 +671,214 @@ export class WebsiteAnalyzerService {
         completedAt: new Date(),
       },
     })
+
+    return this.getAnalysisById(id, requestingUserId, isAdmin)
+  }
+
+  /**
+   * Refreshes an existing analysis in-place:
+   * 1. Checks and sets refreshLock to prevent duplicate concurrent runs
+   * 2. Re-collects website & connector data
+   * 3. Saves fresh timestamped snapshots for sales/metrics
+   * 4. Updates timestamps: lastRefreshedAt, nextRefreshAt (1 hour interval)
+   * 5. PRESERVES previous data on failure, showing stale/error state
+   */
+  async refreshExistingAnalysis(
+    id: string,
+    requestingUserId?: string | null,
+    isAdmin = false
+  ): Promise<AnalysisResponseData> {
+    const record = await prisma.comparisonAnalysis.findUnique({
+      where: { id },
+    })
+
+    if (!record) {
+      throw new Error(`Analysis ${id} not found`)
+    }
+
+    if (!isAdmin && record.userId && requestingUserId && record.userId !== requestingUserId) {
+      throw new Error('FORBIDDEN')
+    }
+
+    // Check concurrency lock: prevent duplicate concurrent runs
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000)
+    if (
+      record.status === 'running' &&
+      record.refreshLock &&
+      record.refreshLock > tenMinutesAgo
+    ) {
+      throw new Error('Analysis is currently running or locked by a concurrent refresh cycle.')
+    }
+
+    // Acquire lock
+    await prisma.comparisonAnalysis.update({
+      where: { id },
+      data: {
+        status: 'running',
+        refreshLock: new Date(),
+      },
+    })
+
+    const competitorUrls =
+      record.competitorUrls.length > 0 ? record.competitorUrls : [record.competitorUrl]
+
+    try {
+      // 1. Collect website and connector data
+      const [myProduct, ...competitorsData] = await Promise.all([
+        collectWebsiteData(record.myUrl),
+        ...competitorUrls.map((url) => collectWebsiteData(url)),
+      ])
+
+      const primaryCompetitor = competitorsData[0] || myProduct
+
+      // If target product failed to resolve/reach, treat as collection failure to preserve existing data
+      if (
+        myProduct.productName === 'Unable to reach website' ||
+        !myProduct.productName ||
+        (myProduct.websiteTitle === 'Not found' && !myProduct.envatoSales) ||
+        myProduct.provenance?.status === 'failed' ||
+        myProduct.normalizedUrl === 'about:blank' ||
+        (myProduct.collectionErrors && myProduct.collectionErrors.length > 0 && myProduct.websiteTitle === 'Not found')
+      ) {
+        throw new Error(`Target product unreachable: ${myProduct.collectionErrors?.join(', ') || 'Website returned not found or failed to load'}`)
+      }
+
+      // 2. Multi-Competitor Sales Snapshots & Metrics
+      let mySalesAnalysis: ProductSalesAnalysis | null = null
+      const competitorSalesList: ProductSalesAnalysis[] = []
+      const competitorSalesMap: Record<string, ProductSalesAnalysis> = {}
+
+      if (myProduct.envatoSales || record.myUrl.includes('codecanyon.net') || record.myUrl.includes('themeforest.net')) {
+        await saveSalesSnapshot(myProduct.envatoSales, record.myUrl, undefined, record.userId)
+        mySalesAnalysis = await calculateProductSalesAnalysis(record.myUrl, myProduct.envatoSales)
+      }
+
+      for (const comp of competitorsData) {
+        if (comp.envatoSales || comp.url.includes('codecanyon.net') || comp.url.includes('themeforest.net')) {
+          await saveSalesSnapshot(comp.envatoSales, comp.url, undefined, record.userId)
+          const s = await calculateProductSalesAnalysis(comp.url, comp.envatoSales)
+          competitorSalesList.push(s)
+          competitorSalesMap[comp.productName] = s
+        }
+      }
+
+      // 3. Multi-Competitor Product Comparison
+      const { comparison, recommendations } = compareProducts(myProduct, primaryCompetitor)
+
+      // 4. On-Page SEO Analysis
+      const targetKeywords = (record.seoAnalysis as any)?.target_keywords || []
+      const seoAnalysis: SeoAnalysisResult = analyzeSeo(myProduct, competitorsData, targetKeywords)
+
+      // 5. Public Comments
+      const scrapedCommentsMap: Record<string, any[]> = {}
+      await Promise.all(
+        competitorsData.map(async (comp) => {
+          if (comp.comments && comp.comments.length > 0) {
+            scrapedCommentsMap[comp.url] = comp.comments
+          } else {
+            const comments = await fetchProductPublicComments(comp.url)
+            scrapedCommentsMap[comp.url] = comments
+          }
+        })
+      )
+      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+
+      // 6. Opportunity Detection
+      const opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
+        commentsAnalysis.recurring_complaints,
+        myProduct
+      )
+
+      if (opportunities.length > 0) {
+        try {
+          await prisma.competitorOpportunity.createMany({
+            data: opportunities.map((opp) => ({
+              analysisId: record.id,
+              userId: record.userId || null,
+              competitorUrl: opp.competitor_url,
+              commentUrl: opp.comment_url,
+              commentDate: opp.comment_date,
+              issueCategory: opp.issue_category,
+              commentSummary: opp.comment_summary,
+              relevantFeature: opp.matching_feature,
+              valueProposition: opp.value_proposition,
+              draftMessage: opp.draft_message,
+              status: opp.status,
+              mentionCount: opp.mention_count,
+              severity: opp.severity,
+            })),
+          })
+        } catch (oppErr) {
+          console.error('Error updating opportunities in refresh:', oppErr)
+        }
+      }
+
+      // 7. Cross-Functional Insights
+      const insights: CompetitorInsightItem[] = generateUnifiedInsights(
+        myProduct,
+        competitorsData,
+        mySalesAnalysis,
+        competitorSalesMap,
+        seoAnalysis,
+        commentsAnalysis
+      )
+
+      const now = new Date()
+      const nextHour = new Date(now.getTime() + 60 * 60 * 1000)
+
+      // 8. Generate Evidence-Grounded Executive Briefing
+      let executiveSummary: string | null = null
+      try {
+        executiveSummary = await generateExecutiveBriefing({
+          myProduct,
+          primaryCompetitor,
+          comparison,
+          commentsSummary: commentsAnalysis.summaries?.find((s) => s.product_url === primaryCompetitor.url) || commentsAnalysis.summaries?.[0] || null,
+          opportunities,
+        })
+      } catch (err) {
+        console.error('Error generating executive briefing during refresh:', err)
+      }
+
+      // 9. Update database record with fresh data and clear lock
+      await prisma.comparisonAnalysis.update({
+        where: { id },
+        data: {
+          status: 'completed',
+          errorMessage: null,
+          executiveSummary,
+          myProduct: JSON.parse(JSON.stringify(myProduct)),
+          competitorProduct: JSON.parse(JSON.stringify(primaryCompetitor)),
+          competitorsData: JSON.parse(JSON.stringify(competitorsData)),
+          comparison: JSON.parse(JSON.stringify(comparison)),
+          recommendations: JSON.parse(JSON.stringify(recommendations)),
+          seoAnalysis: JSON.parse(JSON.stringify(seoAnalysis)),
+          commentsAnalysis: JSON.parse(JSON.stringify(commentsAnalysis)),
+          opportunitiesData: JSON.parse(JSON.stringify(opportunities)),
+          insights: JSON.parse(JSON.stringify(insights)),
+          lastRefreshedAt: now,
+          nextRefreshAt: nextHour,
+          lastActivityCheckAt: now,
+          nextActivityCheckAt: nextHour,
+          completedAt: now,
+          refreshLock: null,
+        },
+      })
+    } catch (err: any) {
+      console.error(`[WebsiteAnalyzerService] Refresh failed for ${id}:`, err)
+      // PRESERVE LAST SUCCESSFUL DATA:
+      // Do NOT overwrite myProduct, competitorsData, etc. with null.
+      await prisma.comparisonAnalysis.update({
+        where: { id },
+        data: {
+          status: 'failed',
+          errorMessage: `Refresh failed at ${new Date().toLocaleTimeString()}: ${err?.message || 'Collection error'}. Previous successful data preserved.`,
+          refreshLock: null,
+          nextRefreshAt: new Date(Date.now() + 15 * 60 * 1000), // Retry in 15 mins
+        },
+      })
+      throw err
+    }
 
     return this.getAnalysisById(id, requestingUserId, isAdmin)
   }
