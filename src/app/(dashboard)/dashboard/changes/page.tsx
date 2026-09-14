@@ -17,29 +17,24 @@ import {
   ChevronDown,
   ChevronUp,
   Zap,
-  Lightbulb,
   Search,
   Flame,
   MessageSquare,
   HelpCircle,
-  TrendingUp,
   Award,
-  Ban,
-  Crosshair,
   TrendingDown,
   FileText,
-  Activity,
   Check,
   X,
   Minus,
   ArrowRight,
+  Target,
+  ExternalLink,
 } from 'lucide-react'
 import {
   buildFeatureBattle,
-  FeatureBattleCategory,
   FeatureDepth,
   FeatureEvidence,
-  FeatureBattleRow,
 } from '@/services/website-analyzer/feature-analyzer'
 
 // Helper for rendering feature depth badge
@@ -119,12 +114,14 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
 export default function CompetitorChangesPage() {
   const { currentProjectId, currentProjectMeta, currentProjectData, isLoading, projects } = useProject()
 
-  // Filters & State
+  // Matrix Filter States
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [classificationFilter, setClassificationFilter] = useState<'ALL' | 'table_stakes' | 'advantage' | 'gap' | 'parity'>('ALL')
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({})
   const [showFullMatrix, setShowFullMatrix] = useState<boolean>(false)
+  const [openFindings, setOpenFindings] = useState<Record<string, boolean>>({})
+  const [showMethodology, setShowMethodology] = useState<boolean>(false)
 
   const myProduct = currentProjectData?.my_product || {}
   const competitors: any[] = currentProjectData?.competitors_data || []
@@ -180,6 +177,13 @@ export default function CompetitorChangesPage() {
     }))
   }
 
+  const toggleFinding = (id: string) => {
+    setOpenFindings((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }))
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-24 text-muted-foreground text-sm">
@@ -211,30 +215,146 @@ export default function CompetitorChangesPage() {
 
   const myProductName = myProduct.productName || 'Your Product'
 
+  // Construct "WHAT WE FOUND" Dynamic Synthesis
+  const topAdvantageNames = summary.myProductAdvantages.slice(0, 2).map((a) => a.feature)
+  const topGapNames = summary.highValueGaps.slice(0, 2).map((g) => g.feature)
+
+  let whatWeFoundNarrative = ''
+  if (topAdvantageNames.length > 0 && topGapNames.length > 0) {
+    whatWeFoundNarrative = `Your product is strong in ${topAdvantageNames.join(' and ')}, while competitors hold an advantage in ${topGapNames.join(' and ')}. The most important gaps to close are the ${summary.highValueGaps.length} capabilities that customers are actively requesting in public discussions.`
+  } else if (topAdvantageNames.length > 0) {
+    whatWeFoundNarrative = `Your product has ${summary.featuresYouLead.length} exclusive advantages led by ${topAdvantageNames.join(' and ')}, giving you a strong differentiation hook against monitored rivals.`
+  } else if (topGapNames.length > 0) {
+    whatWeFoundNarrative = `Competitors currently lead in ${summary.featuresCompetitorsLead.length} cataloged features. Focus on the ${summary.highValueGaps.length} customer-backed gaps like ${topGapNames.join(' and ')} where buyer demand is verified.`
+  } else {
+    whatWeFoundNarrative = `Your product matches competitor baseline capabilities across ${summary.parity.length} shared features. Differentiate by prioritizing custom features requested by customers.`
+  }
+
+  // Construct Curated Top 3-5 Findings
+  const topFindingsList: Array<{
+    id: string
+    type: 'gap' | 'advantage'
+    title: string
+    category: string
+    badgeText: string
+    facts: string[]
+    whyItMatters: string
+    evidenceSnippet?: string
+    customerQuotes?: string[]
+    competitorList?: string[]
+    myStatus?: string
+  }> = []
+
+  // Add top high-value gaps
+  summary.highValueGaps.slice(0, 3).forEach((gap, idx) => {
+    topFindingsList.push({
+      id: `gap-${idx}`,
+      type: 'gap',
+      title: gap.feature,
+      category: gap.category,
+      badgeText: `${gap.priority} PRIORITY GAP`,
+      facts: [
+        `${gap.competitors.length} competitor${gap.competitors.length > 1 ? 's' : ''} offer this (${gap.competitorRatio})`,
+        `${gap.customerMentions} buyer discussions`,
+        `${gap.requestMentions} direct feature requests`,
+      ],
+      whyItMatters: gap.reason || 'Customers are repeatedly asking for this capability in competitor discussions.',
+      evidenceSnippet: gap.evidence?.snippet,
+      customerQuotes: matrix.find((r) => r.feature === gap.feature)?.customerImportance?.representativeQuotes || [],
+      competitorList: gap.competitors,
+      myStatus: gap.myProductDepth === 'Missing' ? 'Not detected on your site' : gap.myProductDepth,
+    })
+  })
+
+  // Add top advantages
+  summary.myProductAdvantages.slice(0, 2).forEach((adv, idx) => {
+    topFindingsList.push({
+      id: `adv-${idx}`,
+      type: 'advantage',
+      title: adv.feature,
+      category: adv.category,
+      badgeText: 'YOUR ADVANTAGE',
+      facts: [
+        `Your product supports this (${adv.myDepth} coverage)`,
+        `0 of ${competitorNames.length} monitored competitors offer verified support`,
+      ],
+      whyItMatters: adv.differentiatorReason || 'Your product holds a verified capability advantage that competitors do not advertise.',
+      customerQuotes: adv.customerQuote ? [adv.customerQuote] : [],
+      myStatus: `${adv.myDepth} Support`,
+    })
+  })
+
+  // Construct Curated 3-5 Recommended Actions
+  const recommendedActions: Array<{
+    rank: number
+    title: string
+    reason: string
+    tag: string
+  }> = []
+
+  if (summary.highValueGaps.length > 0) {
+    recommendedActions.push({
+      rank: 1,
+      title: `Prioritize ${summary.highValueGaps[0].feature}`,
+      reason: `Customer demand is highest here (${summary.highValueGaps[0].customerMentions} buyer mentions, ${summary.highValueGaps[0].requestMentions} requests).`,
+      tag: 'High Buyer Demand',
+    })
+  }
+
+  if (summary.highValueGaps.length > 1) {
+    recommendedActions.push({
+      rank: 2,
+      title: `Improve ${summary.highValueGaps[1].feature}`,
+      reason: `Offered by ${summary.highValueGaps[1].competitors.length} competitors (${summary.highValueGaps[1].competitorRatio}) and represents an active purchasing objection.`,
+      tag: 'Competitor Parity',
+    })
+  } else if (summary.featuresCompetitorsLead.length > 0) {
+    recommendedActions.push({
+      rank: 2,
+      title: `Evaluate ${summary.featuresCompetitorsLead[0]}`,
+      reason: 'Competitors currently hold stronger coverage in this capability area.',
+      tag: 'Competitive Gap',
+    })
+  }
+
+  if (summary.myProductAdvantages.length > 0) {
+    recommendedActions.push({
+      rank: recommendedActions.length + 1,
+      title: `Promote ${summary.myProductAdvantages[0].feature}`,
+      reason: 'This is one of your verified differentiators that competitors lack. Feature it in hero sales copy and product demos.',
+      tag: 'Core Differentiator',
+    })
+  } else if (summary.featuresYouLead.length > 0) {
+    recommendedActions.push({
+      rank: recommendedActions.length + 1,
+      title: `Highlight ${summary.featuresYouLead[0]}`,
+      reason: 'Verified exclusive feature advantage that differentiates your solution in demos.',
+      tag: 'Sales Wedge',
+    })
+  }
+
   return (
     <div className="space-y-6 animate-fade-in pb-16">
-      {/* ========================================================================= */}
-      {/* 0. HEADER — FEATURE BATTLE */}
-      {/* ========================================================================= */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-5">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-wider text-primary border-primary/40 bg-primary/10">
-              FEATURE BATTLE
+              Product Intelligence
             </Badge>
             <Badge variant="secondary" className="text-[10px]">
               {competitorNames.length} Rival{competitorNames.length === 1 ? '' : 's'} Tracked
             </Badge>
             <Badge variant="outline" className="text-[10px] text-muted-foreground">
-              {totalMarketFeatures} Market Features Analyzed
+              {totalMarketFeatures} Capabilities Evaluated
             </Badge>
           </div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
             <Swords className="h-6 w-6 text-primary shrink-0" />
-            <span>Feature Battle — Which product has the better feature offering?</span>
+            <span>Feature Battle</span>
           </h1>
           <p className="text-xs text-muted-foreground max-w-3xl">
-            Direct capability benchmark separating genuine differentiators from table stakes and highlighting missing features that customers actually demand.
+            Clear visibility into what competitors offer, where your product wins, and which gaps matter to buyers.
           </p>
         </div>
 
@@ -249,34 +369,14 @@ export default function CompetitorChangesPage() {
       </div>
 
       {/* ========================================================================= */}
-      {/* 1. WHAT IS THE RESULT? (Executive Summary Banner) */}
-      {/* ========================================================================= */}
-      <Card className="border-primary/30 bg-primary/5 p-4 shadow-sm">
-        <div className="flex items-start gap-3">
-          <div className="p-2 rounded-lg bg-primary/20 text-primary shrink-0 mt-0.5">
-            <Zap className="h-4 w-4" />
-          </div>
-          <div className="space-y-1">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-primary">
-              1. What is the Result? (Feature Battle Verdict)
-            </span>
-            <p className="text-xs sm:text-sm text-foreground font-semibold leading-relaxed">
-              Your product has <strong className="text-emerald-400">{summary.featuresYouLead.length} unique capabilities</strong>, while competitors lead on <strong className="text-rose-400">{summary.featuresCompetitorsLead.length} capabilities</strong> that your product does not currently demonstrate.
-              {summary.highValueGaps.length > 0 && ` Of those, ${summary.highValueGaps.length} have verified customer complaints or requests.`}
-            </p>
-          </div>
-        </div>
-      </Card>
-
-      {/* ========================================================================= */}
-      {/* 2. KEY NUMBERS */}
+      {/* 1. AT A GLANCE */}
       {/* ========================================================================= */}
       <div className="space-y-2">
         <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground block">
-          2. Key Feature Balance
+          1. At a Glance
         </span>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Features You Lead */}
+          {/* Your Advantages */}
           <Card className="border-emerald-500/30 bg-emerald-500/5 p-3.5">
             <span className="text-[10px] text-emerald-400 uppercase font-bold tracking-wider flex items-center gap-1">
               <Award className="h-3 w-3" />
@@ -290,189 +390,255 @@ export default function CompetitorChangesPage() {
             </span>
           </Card>
 
-          {/* Shared Parity */}
+          {/* Shared Capabilities */}
           <Card className="border-blue-500/30 bg-blue-500/5 p-3.5">
             <span className="text-[10px] text-blue-400 uppercase font-bold tracking-wider flex items-center gap-1">
               <CheckCircle2 className="h-3 w-3" />
-              <span>Shared Parity</span>
+              <span>Shared Capabilities</span>
             </span>
             <div className="text-2xl font-bold text-blue-400 mt-1">
               {summary.parity.length}
             </div>
             <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Matched baseline capabilities
+              Matched baseline features
             </span>
           </Card>
 
-          {/* Competitors Lead */}
+          {/* Important Competitive Gaps */}
           <Card className="border-rose-500/30 bg-rose-500/5 p-3.5">
             <span className="text-[10px] text-rose-400 uppercase font-bold tracking-wider flex items-center gap-1">
               <TrendingDown className="h-3 w-3" />
-              <span>Competitor Leads</span>
+              <span>Competitive Gaps</span>
             </span>
             <div className="text-2xl font-bold text-rose-400 mt-1">
               {summary.featuresCompetitorsLead.length}
             </div>
             <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Capabilities rivals hold
+              Capabilities rivals offer
             </span>
           </Card>
 
-          {/* Table Stakes */}
-          <Card className="border-purple-500/30 bg-purple-500/5 p-3.5">
-            <span className="text-[10px] text-purple-400 uppercase font-bold tracking-wider flex items-center gap-1">
-              <Layers className="h-3 w-3" />
-              <span>Table Stakes</span>
+          {/* Customer-Backed Gaps */}
+          <Card className="border-amber-500/30 bg-amber-500/5 p-3.5">
+            <span className="text-[10px] text-amber-400 uppercase font-bold tracking-wider flex items-center gap-1">
+              <Flame className="h-3 w-3" />
+              <span>Customer-Backed Gaps</span>
             </span>
-            <div className="text-2xl font-bold text-purple-400 mt-1">
-              {summary.tableStakes.length}
+            <div className="text-2xl font-bold text-amber-400 mt-1">
+              {summary.highValueGaps.length}
             </div>
             <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Baseline industry expectations
+              Gaps customers are asking for
             </span>
           </Card>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* 3. HIGH-IMPACT GAPS (Top 3–5 First) */}
+      {/* 2. MAIN COMPETITIVE RESULT ("WHAT WE FOUND") */}
+      {/* ========================================================================= */}
+      <Card className="border-primary/40 bg-gradient-to-r from-primary/10 via-primary/5 to-card p-5 shadow-sm">
+        <div className="flex items-start gap-3.5">
+          <div className="p-2.5 rounded-xl bg-primary/20 text-primary shrink-0 mt-0.5">
+            <Zap className="h-5 w-5" />
+          </div>
+          <div className="space-y-1.5 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-primary">
+                2. Main Competitive Result
+              </span>
+              <Badge variant="outline" className="text-[9px] py-0 px-1.5 text-primary border-primary/30">
+                WHAT WE FOUND
+              </Badge>
+            </div>
+            <p className="text-sm font-semibold text-foreground leading-relaxed">
+              {whatWeFoundNarrative}
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      {/* ========================================================================= */}
+      {/* 3. TOP FINDINGS (Top 3–5 Findings) */}
       {/* ========================================================================= */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Flame className="h-4 w-4 text-rose-400" />
-            <span>3. High-Impact Gaps (Missing Competitor Features That Customers Actually Demand)</span>
+            <Target className="h-4 w-4 text-primary" />
+            <span>3. Top Findings ({topFindingsList.length} Key Takeaways)</span>
           </span>
-          <Badge className="bg-rose-500/20 text-rose-300 border-rose-500/40 text-[10px]">
-            {summary.highValueGaps.length} Critical Gaps
-          </Badge>
+          <span className="text-[11px] text-muted-foreground">
+            Ranked by customer demand & market advantage
+          </span>
         </div>
 
-        {summary.highValueGaps.length === 0 ? (
-          <Card className="border-border bg-card p-6 text-center text-xs text-muted-foreground">
-            <CheckCircle2 className="h-6 w-6 text-emerald-400 mx-auto mb-1" />
-            <p className="font-medium text-foreground">Zero Critical Capability Gaps</p>
-            <p className="text-[11px]">Competitors do not offer any features that buyers are demanding from your product.</p>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {summary.highValueGaps.slice(0, 4).map((gap, idx) => (
-              <Card key={idx} className="border-rose-500/30 bg-card p-4 space-y-2 hover:border-rose-500/60 transition-colors">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {topFindingsList.map((finding) => {
+            const isExpanded = !!openFindings[finding.id]
+            const isGap = finding.type === 'gap'
+
+            return (
+              <Card
+                key={finding.id}
+                className={`p-4 space-y-3 transition-all ${
+                  isGap
+                    ? 'border-rose-500/30 bg-card hover:border-rose-500/60'
+                    : 'border-emerald-500/30 bg-card hover:border-emerald-500/60'
+                }`}
+              >
+                {/* Header */}
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-0.5">
-                    <span className="font-bold text-foreground text-xs">{gap.feature}</span>
-                    <div className="text-[10px] text-muted-foreground">
-                      Category: <span className="text-foreground font-medium">{gap.category}</span>
-                    </div>
+                    <Badge
+                      variant="outline"
+                      className={`text-[9px] font-bold uppercase tracking-wider mb-1 ${
+                        isGap
+                          ? 'border-rose-500/40 bg-rose-500/10 text-rose-400'
+                          : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                      }`}
+                    >
+                      {finding.badgeText}
+                    </Badge>
+                    <h3 className="font-bold text-foreground text-sm leading-snug">
+                      {finding.title}
+                    </h3>
+                    <span className="text-[10px] text-muted-foreground block">
+                      Category: <strong className="text-foreground">{finding.category}</strong>
+                    </span>
                   </div>
-                  <Badge
-                    variant="outline"
-                    className="text-[9px] font-bold border-rose-500/40 bg-rose-500/10 text-rose-400 shrink-0"
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => toggleFinding(finding.id)}
+                    className="text-xs gap-1 h-7 px-2 text-primary hover:text-primary shrink-0"
                   >
-                    {gap.priority} PRIORITY
-                  </Badge>
+                    <span>{isExpanded ? 'Hide Evidence' : 'View Evidence'}</span>
+                    {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  </Button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-[11px] bg-muted/20 p-2 rounded border border-border/40">
-                  <div>
-                    <span className="text-muted-foreground block text-[10px]">Rival Adoption:</span>
-                    <span className="font-semibold text-foreground">{gap.competitors.length} competitor{gap.competitors.length > 1 ? 's' : ''} ({gap.competitorRatio})</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px]">Your Status:</span>
-                    <span className="font-semibold text-rose-400">{gap.myProductDepth === 'Missing' ? 'Not Observed' : gap.myProductDepth}</span>
-                  </div>
+                {/* Facts Strip */}
+                <div className="flex flex-wrap gap-2 text-[11px] bg-muted/20 p-2.5 rounded-lg border border-border/50">
+                  {finding.facts.map((fact, fIdx) => (
+                    <div key={fIdx} className="flex items-center gap-1.5 text-foreground font-medium">
+                      <span className={`h-1.5 w-1.5 rounded-full ${isGap ? 'bg-rose-400' : 'bg-emerald-400'}`} />
+                      <span>{fact}</span>
+                    </div>
+                  ))}
                 </div>
 
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {gap.reason}
-                </p>
-
-                <div className="flex items-center gap-3 pt-1 text-[10px] text-muted-foreground border-t border-border/40">
-                  <span className="flex items-center gap-1 text-rose-400 font-semibold">
-                    <MessageSquare className="h-3 w-3" />
-                    {gap.customerMentions} buyer mention{gap.customerMentions > 1 ? 's' : ''}
+                {/* Why It Matters */}
+                <div className="text-xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                    Why It Matters:
                   </span>
-                  {gap.requestMentions > 0 && (
-                    <span>({gap.requestMentions} direct feature request{gap.requestMentions > 1 ? 's' : ''})</span>
-                  )}
+                  <p className="text-muted-foreground leading-relaxed">
+                    {finding.whyItMatters}
+                  </p>
                 </div>
+
+                {/* Expandable Evidence Drawer */}
+                {isExpanded && (
+                  <div className="pt-2 border-t border-border/60 space-y-2.5 animate-fade-in text-xs">
+                    {finding.competitorList && finding.competitorList.length > 0 && (
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">
+                          Competitors Offering This:
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {finding.competitorList.map((cName, cIdx) => (
+                            <Badge key={cIdx} variant="secondary" className="text-[10px] py-0 px-1.5">
+                              {cName}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {finding.evidenceSnippet && (
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-0.5">
+                          Public Listing Reference:
+                        </span>
+                        <p className="text-[11px] italic bg-muted/30 p-2 rounded border border-border/40 text-foreground/90">
+                          "{finding.evidenceSnippet}"
+                        </p>
+                      </div>
+                    )}
+
+                    {finding.customerQuotes && finding.customerQuotes.length > 0 && (
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                          <MessageSquare className="h-3 w-3" />
+                          <span>Customer Feedback Quotes:</span>
+                        </span>
+                        <div className="space-y-1">
+                          {finding.customerQuotes.slice(0, 2).map((q, qIdx) => (
+                            <div
+                              key={qIdx}
+                              className="text-[11px] italic bg-amber-500/5 p-2 rounded border border-amber-500/20 text-muted-foreground"
+                            >
+                              “{q}”
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {finding.myStatus && (
+                      <div className="text-[11px] text-muted-foreground pt-1 flex items-center gap-1.5">
+                        <span>Your Current Status:</span>
+                        <strong className="text-foreground">{finding.myStatus}</strong>
+                      </div>
+                    )}
+                  </div>
+                )}
               </Card>
-            ))}
-          </div>
-        )}
+            )
+          })}
+        </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* 4. YOUR ADVANTAGES (Top 3–5 Differentiators) */}
+      {/* 4. RECOMMENDED ACTIONS ("WHAT SHOULD YOU DO?") */}
       {/* ========================================================================= */}
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Award className="h-4 w-4 text-emerald-400" />
-            <span>4. Your Product Advantages (Where You Win)</span>
+          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground block">
+            4. Recommended Actions
           </span>
-          <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 text-[10px]">
-            {summary.myProductAdvantages.length} Verified Differentiators
+          <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
+            WHAT SHOULD YOU DO?
           </Badge>
         </div>
 
-        {summary.myProductAdvantages.length === 0 ? (
-          <Card className="border-border bg-card p-6 text-center text-xs text-muted-foreground">
-            <p className="font-medium text-foreground">Market Parity Established</p>
-            <p className="text-[11px] mt-0.5">Your catalog matches competitor baseline capabilities.</p>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {summary.myProductAdvantages.slice(0, 3).map((adv, idx) => (
-              <Card key={idx} className="border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="font-bold text-foreground text-xs">{adv.feature}</span>
-                  <DepthBadge depth={adv.myDepth} />
-                </div>
-                <div className="text-[10px] text-emerald-400 font-semibold uppercase tracking-wider">
-                  {adv.category}
-                </div>
-                <p className="text-xs text-foreground/90 leading-relaxed font-medium">
-                  {adv.differentiatorReason}
-                </p>
-                {adv.customerQuote && (
-                  <div className="text-[11px] italic text-muted-foreground bg-background/50 p-2 rounded border border-emerald-500/20">
-                    “{adv.customerQuote}”
-                  </div>
-                )}
-                <div className="pt-1 text-[10px] text-emerald-400/90 font-medium">
-                  Recommendation: Hero marketing hook & sales objection-handler.
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
+        <Card className="border-border bg-card shadow-sm overflow-hidden">
+          <CardHeader className="pb-3 border-b border-border/60 bg-muted/10">
+            <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
+              <Target className="h-4 w-4 text-primary" />
+              <span>Prioritized Tactical Moves</span>
+            </CardTitle>
+            <CardDescription className="text-xs text-muted-foreground">
+              Direct recommendations derived from verified competitor advantages and buyer request volumes.
+            </CardDescription>
+          </CardHeader>
 
-      {/* ========================================================================= */}
-      {/* 5. WHAT SHOULD I DO? (Top 3 Sprint Priorities & Actions) */}
-      {/* ========================================================================= */}
-      <div className="space-y-3">
-        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground block">
-          5. What Should I Do? (Top 3 Feature Sprint Priorities)
-        </span>
-        <Card className="border-primary/40 bg-gradient-to-br from-primary/5 via-card to-card shadow-sm">
           <CardContent className="p-0 divide-y divide-border/60 text-xs">
-            {summary.whatThisMeans.top3Priorities.map((item) => (
-              <div key={item.rank} className="p-4 flex items-start gap-3 hover:bg-muted/10 transition-colors">
+            {recommendedActions.map((action) => (
+              <div key={action.rank} className="p-4 flex items-start gap-3 hover:bg-muted/10 transition-colors">
                 <div className="h-6 w-6 rounded-full bg-primary/20 text-primary font-bold flex items-center justify-center shrink-0 text-xs mt-0.5">
-                  #{item.rank}
+                  #{action.rank}
                 </div>
                 <div className="space-y-1 flex-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-foreground text-xs">{item.feature}</span>
-                    <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
-                      {item.action}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-foreground text-xs">{action.title}</span>
+                    <Badge variant="outline" className="text-[9px] text-primary border-primary/30">
+                      {action.tag}
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    {item.evidenceReason}
+                    {action.reason}
                   </p>
                 </div>
               </div>
@@ -482,25 +648,27 @@ export default function CompetitorChangesPage() {
       </div>
 
       {/* ========================================================================= */}
-      {/* 6. PROGRESSIVE DISCLOSURE: VIEW FULL FEATURE MATRIX (100+ items) */}
+      {/* 5. FULL FEATURE MATRIX (Progressive Disclosure) */}
       {/* ========================================================================= */}
       <Card className="border-border bg-card shadow-sm">
         <CardHeader className="pb-3 border-b border-border/60">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 <Layers className="h-4 w-4 text-primary" />
-                <span>6. Full Feature Matrix & Verification Receipts</span>
-              </CardTitle>
+                <CardTitle className="text-sm font-bold text-foreground">
+                  Full Feature Matrix & Verification Evidence
+                </CardTitle>
+              </div>
               <CardDescription className="text-xs text-muted-foreground mt-0.5">
-                Exhaustive side-by-side specification table across all {matrix.length} identified market capabilities.
+                Investigate all {matrix.length} market capabilities across categories, competitor depth ratings, and evidence quotes.
               </CardDescription>
             </div>
             <Button
-              variant="outline"
+              variant={showFullMatrix ? 'secondary' : 'default'}
               size="sm"
               onClick={() => setShowFullMatrix(!showFullMatrix)}
-              className="text-xs gap-1.5 h-8 shrink-0"
+              className="text-xs gap-1.5 h-8 shrink-0 font-semibold"
             >
               {showFullMatrix ? (
                 <>
@@ -509,7 +677,7 @@ export default function CompetitorChangesPage() {
                 </>
               ) : (
                 <>
-                  <span>View Full Feature Matrix ({matrix.length} features)</span>
+                  <span>Explore Full Feature Battle ({matrix.length} features)</span>
                   <ChevronDown className="h-3.5 w-3.5" />
                 </>
               )}
@@ -756,13 +924,38 @@ export default function CompetitorChangesPage() {
         )}
       </Card>
 
-      {/* Compliance & Provenance Footer */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-muted-foreground border-t border-border/60 pt-4 gap-2">
-        <span className="flex items-center gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-          <span>Every feature depth, evidence receipt, and sentiment count backed by public page DOM markup and customer reviews. Zero fabricated data.</span>
-        </span>
-        <span className="text-right">Feature Battle Intelligence Engine</span>
+      {/* ========================================================================= */}
+      {/* 6. METHODOLOGY & DATA PROVENANCE (Collapsible) */}
+      {/* ========================================================================= */}
+      <div className="border border-border/60 rounded-xl bg-card/50 overflow-hidden text-xs">
+        <button
+          type="button"
+          onClick={() => setShowMethodology(!showMethodology)}
+          className="w-full p-3.5 flex items-center justify-between text-left hover:bg-muted/10 transition-colors"
+        >
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <ShieldCheck className="h-4 w-4 text-emerald-400" />
+            <span className="text-xs font-medium text-foreground">How was this calculated?</span>
+          </div>
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <span>{showMethodology ? 'Hide methodology' : 'Learn more'}</span>
+            {showMethodology ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </div>
+        </button>
+
+        {showMethodology && (
+          <div className="p-4 pt-0 border-t border-border/60 space-y-2 text-muted-foreground text-xs leading-relaxed">
+            <p>
+              Features are extracted directly from public product websites, official specification tables, and documentation. Depth is verified against published page markup.
+            </p>
+            <p>
+              Customer demand is calculated by counting explicit feature requests and complaints across verified marketplace reviews. Unmentioned capabilities are marked <strong>Unknown</strong> rather than assumed Missing unless corroborated by buyer feedback.
+            </p>
+            <p className="text-[11px] text-foreground/80 font-medium">
+              Zero fabricated data. Every result traces directly to public web sources and verified review quotes.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )
