@@ -138,7 +138,22 @@ export class WebsiteAnalyzerService {
       // 3. Deterministic rule-based product comparison
       const { comparison, recommendations } = compareProducts(myProduct, primaryCompetitor)
 
-      // 4. Comprehensive SEO Analysis with Historical Ranking Tracking
+      // 4. Public Comments & Reviews Scraping and Recurring Complaint Analysis
+      const scrapedCommentsMap: Record<string, any[]> = {}
+      await Promise.all(
+        competitorsData.map(async (comp) => {
+          if (comp.comments && comp.comments.length > 0) {
+            scrapedCommentsMap[comp.url] = comp.comments
+          } else {
+            const comments = await fetchProductPublicComments(comp.url)
+            scrapedCommentsMap[comp.url] = comments
+          }
+        })
+      )
+
+      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+
+      // 5. Comprehensive SEO Analysis with Historical Ranking Tracking & Customer Demand Cross-Referencing
       const previousObservations = await prisma.seoKeywordObservation.findMany({
         where: { productUrl: myUrl },
         orderBy: { observedAt: 'desc' },
@@ -158,7 +173,13 @@ export class WebsiteAnalyzerService {
         }
       }
 
-      const seoAnalysis: SeoAnalysisResult = analyzeSeo(myProduct, competitorsData, targetKeywords, historicalRankings)
+      const seoAnalysis: SeoAnalysisResult = analyzeSeo(
+        myProduct,
+        competitorsData,
+        targetKeywords,
+        historicalRankings,
+        commentsAnalysis
+      )
 
       // Store keyword observation snapshots for this analysis
       try {
@@ -178,21 +199,6 @@ export class WebsiteAnalyzerService {
       } catch (seoErr) {
         console.error('Error saving SEO keyword observations:', seoErr)
       }
-
-      // 5. Public Comments & Reviews Scraping and Recurring Complaint Analysis
-      const scrapedCommentsMap: Record<string, any[]> = {}
-      await Promise.all(
-        competitorsData.map(async (comp) => {
-          if (comp.comments && comp.comments.length > 0) {
-            scrapedCommentsMap[comp.url] = comp.comments
-          } else {
-            const comments = await fetchProductPublicComments(comp.url)
-            scrapedCommentsMap[comp.url] = comments
-          }
-        })
-      )
-
-      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
 
       // 6. Opportunity Detection from Recurring or Critical Negative Complaints
       const opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(

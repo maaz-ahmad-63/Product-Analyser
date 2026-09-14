@@ -525,15 +525,15 @@ export default function AnalysisWorkspacePage() {
             )}
           </div>
           <div className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-            <span>{meta?.ownProduct.name || myProduct?.productName || 'Target Product'}</span>
+            <span>{meta?.ownProduct?.name || myProduct?.productName || 'Target Product'}</span>
           </div>
           <a
-            href={meta?.ownProduct.url}
+            href={meta?.ownProduct?.url || myProduct?.url || '#'}
             target="_blank"
             rel="noreferrer"
             className="text-xs text-primary hover:underline inline-flex items-center gap-1 max-w-full truncate font-mono"
           >
-            <span className="truncate">{meta?.ownProduct.url}</span>
+            <span className="truncate">{meta?.ownProduct?.url || myProduct?.url || '—'}</span>
             <ExternalLink className="h-3 w-3 shrink-0" />
           </a>
           <div className="pt-1 flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
@@ -1737,7 +1737,7 @@ export default function AnalysisWorkspacePage() {
                   </div>
                   <p className="text-muted-foreground leading-relaxed text-xs">
                     This executive intelligence report compiles competitive position, marketplace pricing, on-page SEO indicators,
-                    buyer feedback categories, and strategic opportunities for {meta?.ownProduct.name || 'your target product'}.
+                    buyer feedback categories, and strategic opportunities for {meta?.ownProduct?.name || 'your target product'}.
                   </p>
                   <div className="pt-2 border-t border-border flex flex-wrap items-center gap-2">
                     <span className="text-muted-foreground text-[11px]">Included Modules:</span>

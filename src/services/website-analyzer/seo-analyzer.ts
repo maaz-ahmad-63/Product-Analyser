@@ -26,10 +26,24 @@ const STOPWORDS = new Set([
   'very', 'was', 'wasn', 'we', 'were', 'weren', 'what', 'when', 'where', 'which', 'while', 'who',
   'whom', 'why', 'will', 'with', 'won', 'would', 'you', 'your', 'yours', 'yourself', 'yourselves',
   // generic web & marketplace boilerplates
-  'codecanyon', 'themeforest', 'envato', 'item', 'details', 'preview', 'buy', 'license', 'software',
-  'click', 'here', 'view', 'read', 'more', 'download', 'update', 'version', 'free', 'online', 'demo',
-  'website', 'link', 'page', 'site', 'http', 'https', 'www', 'com', 'net', 'org', 'copyright', 'reserved',
-  'item', 'items', 'file', 'files', 'author', 'regular', 'extended', 'support', 'documentation',
+  'full', 'every', 'choose', 'build', 'thousands', 'best', 'item', 'items', 'preview', 'details',
+  'regular', 'extended', 'version', 'features', 'components', 'highlights', 'solution', 'solutions',
+  'simple', 'fast', 'multiple', 'included', 'website', 'landing', 'core', 'distance', 'click', 'here',
+  'read', 'more', 'download', 'free', 'online', 'demo', 'site', 'page', 'code', 'script', 'plugins',
+  'clean', 'easy', 'great', 'good', 'perfect', 'smart', 'super', 'ultra', 'pro', 'top', 'view', 'show',
+  'based', 'using', 'used', 'like', 'with', 'without', 'need', 'make', 'take', 'give', 'from', 'into',
+  'total', 'various', 'different', 'level', 'type', 'mode', 'step', 'user', 'users', 'customer', 'customers',
+  'coupon', 'codecanyon', 'themeforest', 'envato', 'license', 'software', 'update', 'link', 'http', 'https',
+  'copyright', 'reserved', 'file', 'files', 'author', 'support', 'documentation', 'available', 'predefined',
+  'add', 'ons', 'unlimited', 'world', 'everything', 'come', 'comes', 'look', 'looks', 'feel', 'feels'
+])
+
+// Recognized high-intent domain software & capability nouns allowed as single words
+const ALLOWED_SINGLE_WORDS = new Set([
+  'flutter', 'laravel', 'firebase', 'dispatch', 'tracking', 'bidding', 'courier', 'parcel',
+  'rental', 'chauffeur', 'navigation', 'commission', 'analytics', 'inbox', 'chatbot', 'crm',
+  'automation', 'webhook', 'api', 'stripe', 'paypal', 'wallet', 'telemetry', 'realtime',
+  'multivendor', 'marketplace', 'coexistence', 'broadcast', 'omnichannel'
 ])
 
 /**
@@ -57,13 +71,13 @@ export function normalizeTopic(term: string): string {
  */
 export function classifySemanticGroup(topic: string): string {
   const t = topic.toLowerCase()
-  if (/whatsapp|chat|message|inbox|sms|notification|bot|conversation|broadcast|channel/i.test(t)) {
+  if (/whatsapp|chat|message|inbox|sms|notification|bot|conversation|broadcast|channel|omnichannel|coexistence/i.test(t)) {
     return 'Messaging & Communication'
   }
   if (/api|webhook|laravel|flutter|cloud|rest|sdk|database|backend|ios|android|php|node|react|docker/i.test(t)) {
     return 'Architecture & Integrations'
   }
-  if (/crm|automation|workflow|dispatch|tracking|queue|management|schedule|task|booking|driver|ride/i.test(t)) {
+  if (/crm|automation|workflow|dispatch|tracking|queue|management|schedule|task|booking|driver|ride|courier|parcel|rental|chauffeur/i.test(t)) {
     return 'Operations & Workflows'
   }
   if (/stripe|paypal|subscription|billing|pricing|checkout|wallet|invoice|commission|payment/i.test(t)) {
@@ -109,18 +123,20 @@ interface RawTopicEvidence {
 
 /**
  * Extracts candidate content topics from all scraped layers of a product.
+ * Focuses on actual software capabilities, features, tags, and headings.
  */
 function extractProductTopics(product: ExtractedProductData): Map<string, RawTopicEvidence> {
   const topicsMap = new Map<string, RawTopicEvidence>()
 
   const addTopic = (phrase: string, location: string, snippet: string, weight = 1) => {
+    if (!phrase) return
     const normalized = normalizeTopic(phrase)
     if (!normalized || normalized.length < 3) return
     const words = normalized.split(' ').filter((w) => !STOPWORDS.has(w) && w.length > 2)
     if (words.length === 0) return
 
-    // Allow single words if they are key domain terms (>= 4 chars), or 2-3 word ngrams
-    if (words.length === 1 && words[0].length < 4) return
+    // Single words only allowed if recognized domain software capability
+    if (words.length === 1 && !ALLOWED_SINGLE_WORDS.has(words[0])) return
     if (words.length > 4) return
 
     const key = words.join(' ')
@@ -135,9 +151,7 @@ function extractProductTopics(product: ExtractedProductData): Map<string, RawTop
       }
     } else {
       // Capitalize first letter of each word for clean display
-      const displayTopic = phrase
-        .trim()
-        .split(/\s+/)
+      const displayTopic = words
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
         .join(' ')
 
@@ -146,58 +160,63 @@ function extractProductTopics(product: ExtractedProductData): Map<string, RawTop
         normalizedTopic: key,
         count: weight,
         locations: new Set([location]),
-        evidenceSnippet: snippet,
+        evidenceSnippet: snippet || phrase,
       })
     }
   }
 
-  // 1. Title
-  const title = product.websiteTitle || product.productName || product.title || ''
-  if (title) {
-    const cleanTitle = title.replace(/[^a-zA-Z0-9\s-]/g, ' ')
-    const words = cleanTitle.split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
-    for (let i = 0; i < words.length; i++) {
-      if (words[i].length >= 4) addTopic(words[i], 'Title', title, 3)
-      if (i < words.length - 1) addTopic(`${words[i]} ${words[i + 1]}`, 'Title', title, 4)
-      if (i < words.length - 2) addTopic(`${words[i]} ${words[i + 1]} ${words[i + 2]}`, 'Title', title, 4)
+  // 1. Tags (High-value explicit capabilities set by seller)
+  const tags = product.tags || []
+  for (const t of tags) {
+    if (!t) continue
+    addTopic(t, 'Item Tags', t, 4)
+  }
+
+  // 2. Features (Clean bullet titles and key specifications)
+  const features = product.features || []
+  for (const f of features) {
+    if (!f) continue
+    const parts = f.split(/[:–—\-]/)
+    if (parts[0] && parts[0].trim().length > 3 && parts[0].split(/\s+/).length <= 4) {
+      addTopic(parts[0].trim(), 'Feature Section', f, 3)
+    }
+    if (parts[1] && parts[1].trim().length > 3) {
+      const subWords = parts[1].trim().replace(/[^a-zA-Z0-9\s-]/g, ' ').split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
+      for (let i = 0; i < subWords.length - 1; i++) {
+        addTopic(`${subWords[i]} ${subWords[i + 1]}`, 'Feature Specification', f, 2)
+      }
     }
   }
 
-  // 2. H1 Headings
+  // 3. Headings (H1, H2, H3)
   const h1s = product.headings?.h1 || (product.productName ? [product.productName] : [])
   for (const h of h1s) {
     if (!h) continue
     const words = h.replace(/[^a-zA-Z0-9\s-]/g, ' ').split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
-    for (let i = 0; i < words.length; i++) {
-      if (words[i].length >= 4) addTopic(words[i], 'H1 Heading', h, 3)
-      if (i < words.length - 1) addTopic(`${words[i]} ${words[i + 1]}`, 'H1 Heading', h, 4)
+    for (let i = 0; i < words.length - 1; i++) {
+      addTopic(`${words[i]} ${words[i + 1]}`, 'H1 Heading', h, 3)
+      if (i < words.length - 2) addTopic(`${words[i]} ${words[i + 1]} ${words[i + 2]}`, 'H1 Heading', h, 3)
     }
   }
 
-  // 3. H2 Headings
   const h2s = product.headings?.h2 || []
   for (const h of h2s) {
     if (!h) continue
     const words = h.replace(/[^a-zA-Z0-9\s-]/g, ' ').split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
-    for (let i = 0; i < words.length; i++) {
-      if (words[i].length >= 4) addTopic(words[i], 'H2 Headings', h, 2)
-      if (i < words.length - 1) addTopic(`${words[i]} ${words[i + 1]}`, 'H2 Headings', h, 3)
-      if (i < words.length - 2) addTopic(`${words[i]} ${words[i + 1]} ${words[i + 2]}`, 'H2 Headings', h, 3)
+    for (let i = 0; i < words.length - 1; i++) {
+      addTopic(`${words[i]} ${words[i + 1]}`, 'H2 Headings', h, 2)
+      if (i < words.length - 2) addTopic(`${words[i]} ${words[i + 1]} ${words[i + 2]}`, 'H2 Headings', h, 2)
     }
   }
 
-  // 4. Features
-  const features = product.features || []
-  for (const f of features) {
-    if (!f) continue
-    // If feature is short (under 60 chars), add the entire feature heading
-    if (f.length < 50 && f.split(/\s+/).length <= 4) {
-      addTopic(f, 'Features', f, 3)
-    }
-    const words = f.replace(/[^a-zA-Z0-9\s-]/g, ' ').split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
-    for (let i = 0; i < words.length; i++) {
-      if (words[i].length >= 4) addTopic(words[i], 'Features', f, 2)
-      if (i < words.length - 1) addTopic(`${words[i]} ${words[i + 1]}`, 'Features', f, 3)
+  // 4. Title
+  const title = product.websiteTitle || product.productName || product.title || ''
+  if (title) {
+    const cleanTitle = title.replace(/[^a-zA-Z0-9\s-]/g, ' ')
+    const words = cleanTitle.split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
+    for (let i = 0; i < words.length - 1; i++) {
+      addTopic(`${words[i]} ${words[i + 1]}`, 'Product Title', title, 3)
+      if (i < words.length - 2) addTopic(`${words[i]} ${words[i + 1]} ${words[i + 2]}`, 'Product Title', title, 3)
     }
   }
 
@@ -212,25 +231,6 @@ function extractProductTopics(product: ExtractedProductData): Map<string, RawTop
       addTopic(`${slugTerms[i]} ${slugTerms[i + 1]}`, 'URL Slug', url, 2)
     }
   } catch {}
-
-  // 6. Tags
-  const tags = product.tags || []
-  for (const t of tags) {
-    if (!t) continue
-    addTopic(t, 'Item Tags', t, 2)
-  }
-
-  // 7. Body Description
-  const desc = product.description || ''
-  if (desc) {
-    const cleanDesc = desc.slice(0, 1500).replace(/[^a-zA-Z0-9\s-]/g, ' ')
-    const words = cleanDesc.split(/\s+/).filter((w) => !STOPWORDS.has(w.toLowerCase()) && w.length > 2)
-    for (let i = 0; i < words.length - 1; i++) {
-      if (i % 2 === 0) {
-        addTopic(`${words[i]} ${words[i + 1]}`, 'Description Body', desc.slice(0, 120), 1)
-      }
-    }
-  }
 
   return topicsMap
 }
@@ -418,9 +418,15 @@ export function analyzeSeo(
   myProduct: ExtractedProductData,
   competitorProducts: ExtractedProductData[],
   userTargetKeywords: string[] = [],
-  historicalRankings: Record<string, HistoricalKeywordRanking> = {}
+  historicalRankings: Record<string, HistoricalKeywordRanking> = {},
+  commentsData?: { comments?: any[]; clusters?: any[]; all_comments?: any[] } | any[]
 ): SeoAnalysisResult {
   const allProducts = [myProduct, ...competitorProducts]
+
+  // Extract raw comments list for customer demand matching
+  const rawComments: any[] = Array.isArray(commentsData)
+    ? commentsData
+    : commentsData?.all_comments || commentsData?.comments || []
 
   // 1. Audit on-page technical SEO for all products
   const audits: Record<string, SeoOnPageAudit> = {}
@@ -480,6 +486,36 @@ export function analyzeSeo(
     const semanticGroup = classifySemanticGroup(displayTopic)
     const evidenceSnippet = competitorMatches[0]?.evidence.evidenceSnippet || myEvidence?.evidenceSnippet
 
+    // Match customer demand from real reviews / comments
+    const topicWords = key.split(' ').filter((w) => w.length > 2)
+    let mentions = 0
+    let sampleCustomerQuote: string | undefined
+
+    if (rawComments.length > 0) {
+      for (const c of rawComments) {
+        const text = (c.comment_text || c.text || c.content || '').toLowerCase()
+        if (!text) continue
+
+        if (text.includes(key)) {
+          mentions++
+          if (!sampleCustomerQuote) sampleCustomerQuote = text.slice(0, 140)
+          continue
+        }
+
+        if (topicWords.length >= 2) {
+          if (topicWords.every((w) => text.includes(w))) {
+            mentions++
+            if (!sampleCustomerQuote) sampleCustomerQuote = text.slice(0, 140)
+          }
+        } else if (topicWords.length === 1 && ALLOWED_SINGLE_WORDS.has(topicWords[0])) {
+          if (text.includes(topicWords[0])) {
+            mentions++
+            if (!sampleCustomerQuote) sampleCustomerQuote = text.slice(0, 140)
+          }
+        }
+      }
+    }
+
     observedTopics.push({
       topic: displayTopic,
       normalizedTopic: key,
@@ -490,6 +526,7 @@ export function analyzeSeo(
       inCompetitors,
       competitorNames,
       evidenceSnippet,
+      customerMentions: mentions,
     })
 
     if (inMyProduct) myTopicNames.push(displayTopic)
@@ -504,12 +541,31 @@ export function analyzeSeo(
           ? `Competitor ${Array.from(topComp.evidence.locations).join(' / ')}: "${topComp.evidence.evidenceSnippet}"`
           : `Observed in competitor ${Array.from(topComp.evidence.locations).join(', ')}`
 
+        const isHighValue = mentions >= 3 || (mentions > 0 && competitorMatches.length >= 2) || competitorMatches.length >= 3
+
+        const customerEvidence = mentions > 0
+          ? `${mentions} customer discussions across tracked competitor products${sampleCustomerQuote ? ` (e.g. "${sampleCustomerQuote.trim()}...")` : ''}`
+          : undefined
+
+        const strategicImpact = mentions > 0
+          ? `Competitors cover "${displayTopic}" (${competitorNames.length} rivals) and ${mentions} prospective buyers discuss this capability. Your listing lacks this terminology, leaving high-intent search traffic to rivals.`
+          : `Competitors cover "${displayTopic}" across their headings and specifications (${competitorNames.length} rivals). Your page lacks this terminology, conceding buyer search intent for this capability.`
+
+        const recommendedAction = mentions > 0
+          ? `Incorporate dedicated content, H2 headings, and feature bullet points covering "${displayTopic}" to capture verified buyer demand.`
+          : `Add dedicated section or bullet addressing "${displayTopic}" to match competitor positioning.`
+
         competitorOnlyTopicGaps.push({
           topic: displayTopic,
           evidence: topEvidence,
           affectedCompetitors: competitorNames,
-          strategicImpact: `Competitors cover "${displayTopic}" in their headings and specifications. Your page lacks this terminology, conceding buyer search intent for this capability.`,
-          recommendedAction: `Incorporate dedicated content, H2 headings, or bullet points explaining your workflow for "${displayTopic}".`,
+          strategicImpact,
+          recommendedAction,
+          customerMentions: mentions,
+          isHighValue,
+          customerEvidence,
+          listingStatus: 'Not observed in your listing',
+          featureStatus: 'Unknown / Not mentioned',
         })
       }
     } else if (inMyProduct) {
@@ -519,7 +575,17 @@ export function analyzeSeo(
 
   // Sort observed topics by evidence count
   observedTopics.sort((a, b) => b.evidenceCount - a.evidenceCount)
-  competitorOnlyTopicGaps.sort((a, b) => b.affectedCompetitors.length - a.affectedCompetitors.length)
+
+  // Sort competitor gaps: High value first, then customer mentions descending, then competitor coverage descending
+  competitorOnlyTopicGaps.sort((a, b) => {
+    const aHv = a.isHighValue ? 1 : 0
+    const bHv = b.isHighValue ? 1 : 0
+    if (bHv !== aHv) return bHv - aHv
+    const aMentions = a.customerMentions || 0
+    const bMentions = b.customerMentions || 0
+    if (bMentions !== aMentions) return bMentions - aMentions
+    return b.affectedCompetitors.length - a.affectedCompetitors.length
+  })
 
   const compTopicNames = Array.from(compTopicNamesSet)
 
@@ -707,24 +773,38 @@ export function analyzeSeo(
   // Content gap actions
   if (competitorOnlyTopicGaps.length > 0) {
     const topGap = competitorOnlyTopicGaps[0]
+    const gapObjective = topGap.customerMentions && topGap.customerMentions > 0
+      ? `Captured by ${topGap.affectedCompetitors.length} rivals and demanded in ${topGap.customerMentions} customer discussions`
+      : `Close competitive content gap against ${topGap.affectedCompetitors.join(', ')}`
+    const gapEvidence = topGap.customerEvidence
+      ? `${topGap.evidence}. Customer validation: ${topGap.customerEvidence}`
+      : topGap.evidence
+
     prioritizedActions.push({
       id: 'act_content_gap_1',
-      action: `Create dedicated feature section for "${topGap.topic}"`,
-      evidence: topGap.evidence,
-      expectedObjective: `Close competitive content gap against ${topGap.affectedCompetitors.join(', ')}`,
-      priority: 'high',
+      action: `Strengthen positioning around "${topGap.topic}"`,
+      evidence: gapEvidence,
+      expectedObjective: gapObjective,
+      priority: topGap.isHighValue ? 'critical' : 'high',
       category: 'content_gap',
     })
   }
 
   if (competitorOnlyTopicGaps.length > 1) {
     const secondGap = competitorOnlyTopicGaps[1]
+    const secondObjective = secondGap.customerMentions && secondGap.customerMentions > 0
+      ? `Validated by ${secondGap.customerMentions} customer discussions across rivals`
+      : `Capture long-tail search intent currently held by ${secondGap.affectedCompetitors.join(', ')}`
+    const secondEvidence = secondGap.customerEvidence
+      ? `${secondGap.evidence}. Customer validation: ${secondGap.customerEvidence}`
+      : secondGap.evidence
+
     prioritizedActions.push({
       id: 'act_content_gap_2',
-      action: `Add workflow documentation covering "${secondGap.topic}"`,
-      evidence: secondGap.evidence,
-      expectedObjective: `Capture long-tail search intent currently held by ${secondGap.affectedCompetitors.join(', ')}`,
-      priority: 'medium',
+      action: `Clarify "${secondGap.topic}" capabilities in listing headings`,
+      evidence: secondEvidence,
+      expectedObjective: secondObjective,
+      priority: secondGap.isHighValue ? 'high' : 'medium',
       category: 'content_gap',
     })
   }

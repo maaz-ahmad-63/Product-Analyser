@@ -380,6 +380,7 @@ export interface ObservedTopic {
   inCompetitors: boolean
   competitorNames: string[]
   evidenceSnippet?: string
+  customerMentions?: number
 }
 
 export interface CompetitorTopicGap {
@@ -388,6 +389,11 @@ export interface CompetitorTopicGap {
   affectedCompetitors: string[]
   strategicImpact: string
   recommendedAction: string
+  customerMentions?: number
+  isHighValue?: boolean
+  customerEvidence?: string
+  listingStatus?: string
+  featureStatus?: string
 }
 
 export interface CompetitorSeoProfile {
