@@ -138,20 +138,21 @@ export class WebsiteAnalyzerService {
       // 3. Deterministic rule-based product comparison
       const { comparison, recommendations } = compareProducts(myProduct, primaryCompetitor)
 
-      // 4. Public Comments & Reviews Scraping and Recurring Complaint Analysis
+      // 4. Public Comments & Reviews Scraping and Recurring Complaint Analysis (includes both own product and competitors)
+      const allAnalysisProducts = [myProduct, ...competitorsData]
       const scrapedCommentsMap: Record<string, any[]> = {}
       await Promise.all(
-        competitorsData.map(async (comp) => {
-          if (comp.comments && comp.comments.length > 0) {
-            scrapedCommentsMap[comp.url] = comp.comments
+        allAnalysisProducts.map(async (prod) => {
+          if (prod.comments && prod.comments.length > 0) {
+            scrapedCommentsMap[prod.url] = prod.comments
           } else {
-            const comments = await fetchProductPublicComments(comp.url)
-            scrapedCommentsMap[comp.url] = comments
+            const comments = await fetchProductPublicComments(prod.url)
+            scrapedCommentsMap[prod.url] = comments
           }
         })
       )
 
-      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(allAnalysisProducts, scrapedCommentsMap)
 
       // 5. Comprehensive SEO Analysis with Historical Ranking Tracking & Customer Demand Cross-Referencing
       const previousObservations = await prisma.seoKeywordObservation.findMany({
@@ -181,28 +182,41 @@ export class WebsiteAnalyzerService {
         commentsAnalysis
       )
 
-      // Store keyword observation snapshots for this analysis
+      // Persist SEO observations for historical tracking
       try {
-        for (const row of seoAnalysis.comparison_table) {
-          await prisma.seoKeywordObservation.create({
-            data: {
-              analysisId: record.id,
+        if (seoAnalysis.comparison_table && seoAnalysis.comparison_table.length > 0) {
+          await prisma.seoKeywordObservation.createMany({
+            data: seoAnalysis.comparison_table.map((row: any) => ({
               userId: userId || null,
               keyword: row.keyword,
               productUrl: myUrl,
               searchEngine: 'Envato Marketplace & Search Visibility',
               rankPosition: row.my_rank,
               status: row.my_rank !== null ? 'checked' : 'unavailable',
-            },
+            })),
+          })
+        } else if (targetKeywords.length > 0) {
+          await prisma.seoKeywordObservation.createMany({
+            data: targetKeywords.map((kw) => ({
+              userId: userId || null,
+              keyword: kw,
+              productUrl: myUrl,
+              searchEngine: 'Envato Marketplace & Search Visibility',
+              rankPosition: null,
+              status: 'unavailable',
+            })),
           })
         }
       } catch (seoErr) {
         console.error('Error saving SEO keyword observations:', seoErr)
       }
 
-      // 6. Opportunity Detection from Recurring or Critical Negative Complaints
+      // 6. Opportunity Detection from Recurring or Critical Negative Complaints (exclusively targeting competitor issues)
+      const competitorComplaints = commentsAnalysis.recurring_complaints.filter(
+        (c) => c.competitor_url !== myUrl && c.competitor_url !== myProduct.url
+      )
       const opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
-        commentsAnalysis.recurring_complaints,
+        competitorComplaints,
         myProduct
       )
 
@@ -775,20 +789,21 @@ export class WebsiteAnalyzerService {
       const targetKeywords = (record.seoAnalysis as any)?.target_keywords || []
       const seoAnalysis: SeoAnalysisResult = analyzeSeo(myProduct, competitorsData, targetKeywords)
 
-      // 5. Public Comments
+      // 5. Public Comments (includes both own product and competitors)
       const existingCommentsAnalysis = record.commentsAnalysis as unknown as CommentsAnalysisResult | null
+      const allAnalysisProducts = [myProduct, ...competitorsData]
       const scrapedCommentsMap: Record<string, any[]> = {}
       await Promise.all(
-        competitorsData.map(async (comp) => {
-          if (comp.comments && comp.comments.length > 0) {
-            scrapedCommentsMap[comp.url] = comp.comments
+        allAnalysisProducts.map(async (prod) => {
+          if (prod.comments && prod.comments.length > 0) {
+            scrapedCommentsMap[prod.url] = prod.comments
           } else {
-            const comments = await fetchProductPublicComments(comp.url)
-            scrapedCommentsMap[comp.url] = comments
+            const comments = await fetchProductPublicComments(prod.url)
+            scrapedCommentsMap[prod.url] = comments
           }
         })
       )
-      let commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+      let commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(allAnalysisProducts, scrapedCommentsMap)
 
       // Safe Non-Destructive Guard: If scraping comments yielded empty results
       // (e.g. serverless environment without python stealth scraper, or temporary scraper limit),
@@ -803,9 +818,12 @@ export class WebsiteAnalyzerService {
         commentsAnalysis = existingCommentsAnalysis
       }
 
-      // 6. Opportunity Detection
+      // 6. Opportunity Detection (only from competitor complaints)
+      const competitorComplaints = commentsAnalysis.recurring_complaints.filter(
+        (c) => c.competitor_url !== record.myUrl && c.competitor_url !== myProduct.url
+      )
       let opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
-        commentsAnalysis.recurring_complaints,
+        competitorComplaints,
         myProduct
       )
 
