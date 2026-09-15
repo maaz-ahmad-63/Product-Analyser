@@ -1,12 +1,16 @@
 'use client'
 
-import React from 'react'
+import React, { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { useProject } from '@/context/project-provider'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { MetricExplainer } from '@/components/shared/metric-explainer'
+import { InteractiveTrendChart, TrendChartItem } from '@/components/shared/interactive-trend-chart'
+import { ObservationDrilldownModal, ObservationPointData } from '@/components/shared/observation-drilldown-modal'
+import { ProductIntelligenceTimeline, TimelineEventItem } from '@/components/shared/product-intelligence-timeline'
 import {
   Sparkles,
   Swords,
@@ -217,6 +221,100 @@ export default function OverviewPage() {
   const threatDetail = maxSales > 0
     ? `${salesLeaderName} holds ${maxSales.toLocaleString()} sales and high category visibility, making them the default evaluation choice for new buyers.`
     : `Competitors are actively iterating on feature parity.`
+
+  const [drilldownPoint, setDrilldownPoint] = useState<ObservationPointData | null>(null)
+
+  // Real historical sales snapshot observations (Progressive Disclosure Level 2 Graph)
+  const salesTrendData: TrendChartItem[] = useMemo(() => {
+    const history = currentProjectData?.my_sales_analysis?.sales_history || []
+    if (!Array.isArray(history) || history.length === 0) return []
+
+    let prevSales: number | null = null
+    const items: TrendChartItem[] = []
+
+    const step = Math.max(1, Math.floor(history.length / 12))
+    const sampled = history.filter((_, idx) => idx % step === 0 || idx === history.length - 1)
+
+    for (const item of sampled) {
+      if (item.total_sales !== null && item.total_sales !== undefined) {
+        const dateObj = new Date(item.collected_at)
+        const formattedDate = !isNaN(dateObj.getTime())
+          ? dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+          : item.collected_at
+
+        const s = Number(item.total_sales)
+        const delta = prevSales !== null ? s - prevSales : null
+
+        items.push({
+          id: item.id || String(items.length),
+          date: item.collected_at,
+          formattedDate,
+          value: s,
+          previousValue: prevSales,
+          delta,
+          growthPercentage:
+            prevSales !== null && prevSales > 0
+              ? Number((((s - prevSales) / prevSales) * 100).toFixed(1))
+              : null,
+          observationType: 'snapshot',
+          observationSummary: `Recorded observation of ${s.toLocaleString()} cumulative sales on ${formattedDate}. ${
+            delta && delta > 0 ? `+${delta} sales observed since previous check.` : 'No change observed in this check window.'
+          }`,
+          rawItem: {
+            sourceUrl: item.source_url || currentProjectData?.my_url,
+            evidence: [
+              {
+                author: 'System Snapshot Observation',
+                text: `Verified listing observation on ${formattedDate}. Price: ${item.price || 'N/A'}, Rating: ★ ${item.rating ?? 'N/A'}.`,
+                date: item.collected_at,
+              },
+            ],
+          },
+        })
+        prevSales = s
+      }
+    }
+    return items
+  }, [currentProjectData])
+
+  // Real detected events for Timeline (Progressive Disclosure Level 3 Events & Evidence)
+  const timelineEvents: TimelineEventItem[] = useMemo(() => {
+    const rawActivities = currentProjectData?.activities || []
+    if (!Array.isArray(rawActivities) || rawActivities.length === 0) return []
+
+    return rawActivities.map((act: any) => {
+      const dateObj = new Date(act.createdAt || act.snapshotTimestamp)
+      const formattedDate = !isNaN(dateObj.getTime())
+        ? dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : String(act.createdAt || '')
+
+      let category: TimelineEventItem['category'] = 'features'
+      if (act.activityType?.includes('sales')) category = 'sales'
+      else if (act.activityType?.includes('price') || act.activityType?.includes('pricing')) category = 'pricing'
+      else if (act.activityType?.includes('complaint') || act.activityType?.includes('discussion')) category = 'discussions'
+      else if (act.activityType?.includes('rating') || act.activityType?.includes('review')) category = 'reviews'
+
+      return {
+        id: act.id,
+        date: act.createdAt,
+        formattedDate,
+        title: act.activityTitle || act.whatChanged || 'Product Activity Detected',
+        whatHappened: act.whatChanged || act.activityTitle || 'Activity observed in telemetry scan.',
+        whyItMatters: act.competitorComparison || act.possibleReasons,
+        activityType: act.activityType,
+        category,
+        impactType: act.impactType || 'neutral',
+        isOurProduct: act.isOurProduct,
+        productName: act.productName || (act.isOurProduct ? 'Your Product' : 'Competitor'),
+        previousValue: act.previousValue,
+        currentValue: act.currentValue,
+        deltaValue: act.deltaValue,
+        possibleReasons: act.possibleReasons,
+        recommendedActions: act.recommendedActions,
+        sourceUrl: act.productUrl,
+      }
+    })
+  }, [currentProjectData])
 
   return (
     <div className="space-y-8 animate-fade-in pb-12">
@@ -433,6 +531,64 @@ export default function OverviewPage() {
         </div>
       </div>
 
+      {/* ========================================================================= */}
+      {/* 2. GROWTH & TIMELINE INTELLIGENCE (Progressive Disclosure Level 2 & 3) */}
+      {/* ========================================================================= */}
+      {(salesTrendData.length > 0 || timelineEvents.length > 0) && (
+        <div className="space-y-4 pt-2">
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-primary" />
+                <h2 className="text-lg font-bold tracking-tight text-foreground">
+                  Growth Trajectory & Intelligence Timeline
+                </h2>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Observe live product momentum and inspect detected events with verifiable evidence.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+            {/* Left: Interactive Sales & Growth Chart */}
+            <Card className="border-border bg-card p-4 sm:p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                    Observed Sales Activity
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    Snapshot observations over time. Click any point to drill down into underlying telemetry.
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-[10px] text-muted-foreground font-mono">
+                  {salesTrendData.length} observations
+                </Badge>
+              </div>
+
+              <InteractiveTrendChart
+                data={salesTrendData}
+                metricLabel="Total Sales"
+                color="#10b981"
+                height={220}
+                formatValue={(v) => `${v.toLocaleString()} sales`}
+                onSelectPoint={(pt) => setDrilldownPoint(pt)}
+              />
+            </Card>
+
+            {/* Right: Product Intelligence Timeline */}
+            <Card className="border-border bg-card p-4 sm:p-5 shadow-sm space-y-3">
+              <ProductIntelligenceTimeline
+                events={timelineEvents}
+                title="Telemetry & Competitor Timeline"
+                maxItems={6}
+              />
+            </Card>
+          </div>
+        </div>
+      )}
+
       {/* DEEP DIVE MODULE NAVIGATION (1-Click Access to the 7 Focused Modules) */}
       <div className="space-y-4 pt-2">
         <div>
@@ -638,6 +794,9 @@ export default function OverviewPage() {
         </span>
         <span>Public verified sources · No fabricated metrics</span>
       </div>
+
+      {/* Observation Point Drill-Down Modal (Summary -> Graph -> Event -> Evidence) */}
+      <ObservationDrilldownModal data={drilldownPoint} onClose={() => setDrilldownPoint(null)} />
     </div>
   )
 }

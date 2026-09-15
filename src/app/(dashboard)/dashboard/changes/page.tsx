@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import Link from 'next/link'
 import { useProject } from '@/context/project-provider'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -123,6 +123,28 @@ export default function CompetitorChangesPage() {
   const [openFindings, setOpenFindings] = useState<Record<string, boolean>>({})
   const [showMethodology, setShowMethodology] = useState<boolean>(false)
 
+  // Interactive At-a-Glance block list modals
+  const [activeBlockModal, setActiveBlockModal] = useState<'advantages' | 'parity' | 'gaps' | 'customer_gaps' | null>(null)
+  const [blockSearch, setBlockSearch] = useState<string>('')
+  const [blockCategoryFilter, setBlockCategoryFilter] = useState<string>('ALL')
+
+  // Escape key & body scroll lock for modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setActiveBlockModal(null)
+    }
+    if (activeBlockModal) {
+      window.addEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = 'unset'
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = 'unset'
+    }
+  }, [activeBlockModal])
+
   const myProduct = currentProjectData?.my_product || {}
   const competitors: any[] = currentProjectData?.competitors_data || []
   const commentsAnalysis = currentProjectData?.comments_analysis
@@ -133,6 +155,85 @@ export default function CompetitorChangesPage() {
   }, [myProduct, competitors, commentsAnalysis])
 
   const { summary, matrix, categories, totalMarketFeatures } = featureBattle
+
+  // Data for the active At-a-Glance block modal
+  const modalData = useMemo(() => {
+    if (!activeBlockModal) return null
+
+    let title = ''
+    let subtitle = ''
+    let badgeClass = ''
+    let badgeText = ''
+    let rows: typeof matrix = []
+
+    if (activeBlockModal === 'advantages') {
+      title = 'Your Product Advantages'
+      subtitle = 'Capabilities where your product leads or offers verified superiority not matched by rivals.'
+      badgeClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+      badgeText = 'ADVANTAGE'
+      rows = matrix.filter(
+        (r) => summary.featuresYouLead.includes(r.feature) || r.classification === 'advantage' || r.isGenuineDifferentiator
+      )
+    } else if (activeBlockModal === 'parity') {
+      title = 'Shared Baseline Capabilities'
+      subtitle = 'Matched industry capabilities where both your product and rivals meet baseline buyer expectations.'
+      badgeClass = 'bg-blue-500/10 text-blue-400 border-blue-500/30'
+      badgeText = 'PARITY'
+      rows = matrix.filter(
+        (r) =>
+          summary.parity.includes(r.feature) ||
+          r.classification === 'parity' ||
+          r.classification === 'table_stakes'
+      )
+    } else if (activeBlockModal === 'gaps') {
+      title = 'Important Competitive Gaps'
+      subtitle = 'Capabilities rivals offer that your product lacks or only partially supports.'
+      badgeClass = 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+      badgeText = 'COMPETITIVE GAP'
+      rows = matrix.filter(
+        (r) =>
+          summary.featuresCompetitorsLead.includes(r.feature) ||
+          r.classification === 'gap'
+      )
+    } else if (activeBlockModal === 'customer_gaps') {
+      title = 'Customer-Backed Feature Gaps'
+      subtitle = 'Capabilities demanded by buyers in verified discussion threads and review complaints.'
+      badgeClass = 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+      badgeText = 'CUSTOMER DEMAND'
+      const highSet = new Set(summary.highValueGaps.map((g) => g.feature.toLowerCase()))
+      rows = matrix.filter(
+        (r) =>
+          highSet.has(r.feature.toLowerCase()) ||
+          r.isHighValueGap ||
+          r.customerImportance?.importanceScore === 'HIGH' ||
+          r.customerImportance?.importanceScore === 'MEDIUM'
+      )
+    }
+
+    const availableCategories = Array.from(new Set(rows.map((r) => r.category))).sort()
+
+    const filtered = rows.filter((r) => {
+      if (blockCategoryFilter !== 'ALL' && r.category !== blockCategoryFilter) return false
+      if (blockSearch.trim()) {
+        const q = blockSearch.toLowerCase().trim()
+        const matchName = r.feature.toLowerCase().includes(q)
+        const matchCat = r.category.toLowerCase().includes(q)
+        const matchEv = r.myProduct?.evidence?.snippet?.toLowerCase().includes(q)
+        if (!matchName && !matchCat && !matchEv) return false
+      }
+      return true
+    })
+
+    return {
+      title,
+      subtitle,
+      badgeClass,
+      badgeText,
+      totalCount: rows.length,
+      items: filtered,
+      availableCategories,
+    }
+  }, [activeBlockModal, matrix, summary, blockSearch, blockCategoryFilter])
 
   // Competitor names list
   const competitorNames = useMemo(() => {
@@ -377,11 +478,21 @@ export default function CompetitorChangesPage() {
         </span>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {/* Your Advantages */}
-          <Card className="border-emerald-500/30 bg-emerald-500/5 p-3.5">
-            <span className="text-[10px] text-emerald-400 uppercase font-bold tracking-wider flex items-center gap-1">
-              <Award className="h-3 w-3" />
-              <span>Your Advantages</span>
-            </span>
+          <Card
+            onClick={() => {
+              setActiveBlockModal('advantages')
+              setBlockSearch('')
+              setBlockCategoryFilter('ALL')
+            }}
+            className="border-emerald-500/30 bg-emerald-500/5 p-3.5 cursor-pointer hover:border-emerald-500/60 hover:bg-emerald-500/10 transition-all group"
+          >
+            <div className="flex items-center justify-between text-[10px] text-emerald-400 uppercase font-bold tracking-wider">
+              <span className="flex items-center gap-1">
+                <Award className="h-3 w-3" />
+                <span>Your Advantages</span>
+              </span>
+              <span className="text-[9px] text-emerald-400/80 font-normal group-hover:underline">List →</span>
+            </div>
             <div className="text-2xl font-bold text-emerald-400 mt-1">
               {summary.featuresYouLead.length}
             </div>
@@ -391,11 +502,21 @@ export default function CompetitorChangesPage() {
           </Card>
 
           {/* Shared Capabilities */}
-          <Card className="border-blue-500/30 bg-blue-500/5 p-3.5">
-            <span className="text-[10px] text-blue-400 uppercase font-bold tracking-wider flex items-center gap-1">
-              <CheckCircle2 className="h-3 w-3" />
-              <span>Shared Capabilities</span>
-            </span>
+          <Card
+            onClick={() => {
+              setActiveBlockModal('parity')
+              setBlockSearch('')
+              setBlockCategoryFilter('ALL')
+            }}
+            className="border-blue-500/30 bg-blue-500/5 p-3.5 cursor-pointer hover:border-blue-500/60 hover:bg-blue-500/10 transition-all group"
+          >
+            <div className="flex items-center justify-between text-[10px] text-blue-400 uppercase font-bold tracking-wider">
+              <span className="flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3" />
+                <span>Shared Capabilities</span>
+              </span>
+              <span className="text-[9px] text-blue-400/80 font-normal group-hover:underline">List →</span>
+            </div>
             <div className="text-2xl font-bold text-blue-400 mt-1">
               {summary.parity.length}
             </div>
@@ -405,11 +526,21 @@ export default function CompetitorChangesPage() {
           </Card>
 
           {/* Important Competitive Gaps */}
-          <Card className="border-rose-500/30 bg-rose-500/5 p-3.5">
-            <span className="text-[10px] text-rose-400 uppercase font-bold tracking-wider flex items-center gap-1">
-              <TrendingDown className="h-3 w-3" />
-              <span>Competitive Gaps</span>
-            </span>
+          <Card
+            onClick={() => {
+              setActiveBlockModal('gaps')
+              setBlockSearch('')
+              setBlockCategoryFilter('ALL')
+            }}
+            className="border-rose-500/30 bg-rose-500/5 p-3.5 cursor-pointer hover:border-rose-500/60 hover:bg-rose-500/10 transition-all group"
+          >
+            <div className="flex items-center justify-between text-[10px] text-rose-400 uppercase font-bold tracking-wider">
+              <span className="flex items-center gap-1">
+                <TrendingDown className="h-3 w-3" />
+                <span>Competitive Gaps</span>
+              </span>
+              <span className="text-[9px] text-rose-400/80 font-normal group-hover:underline">List →</span>
+            </div>
             <div className="text-2xl font-bold text-rose-400 mt-1">
               {summary.featuresCompetitorsLead.length}
             </div>
@@ -419,11 +550,21 @@ export default function CompetitorChangesPage() {
           </Card>
 
           {/* Customer-Backed Gaps */}
-          <Card className="border-amber-500/30 bg-amber-500/5 p-3.5">
-            <span className="text-[10px] text-amber-400 uppercase font-bold tracking-wider flex items-center gap-1">
-              <Flame className="h-3 w-3" />
-              <span>Customer-Backed Gaps</span>
-            </span>
+          <Card
+            onClick={() => {
+              setActiveBlockModal('customer_gaps')
+              setBlockSearch('')
+              setBlockCategoryFilter('ALL')
+            }}
+            className="border-amber-500/30 bg-amber-500/5 p-3.5 cursor-pointer hover:border-amber-500/60 hover:bg-amber-500/10 transition-all group"
+          >
+            <div className="flex items-center justify-between text-[10px] text-amber-400 uppercase font-bold tracking-wider">
+              <span className="flex items-center gap-1">
+                <Flame className="h-3 w-3" />
+                <span>Customer-Backed Gaps</span>
+              </span>
+              <span className="text-[9px] text-amber-400/80 font-normal group-hover:underline">List →</span>
+            </div>
             <div className="text-2xl font-bold text-amber-400 mt-1">
               {summary.highValueGaps.length}
             </div>
@@ -957,6 +1098,205 @@ export default function CompetitorChangesPage() {
           </div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* 7. AT-A-GLANCE BLOCK DETAIL LIST MODAL */}
+      {/* ========================================================================= */}
+      {activeBlockModal && modalData && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in-0"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setActiveBlockModal(null)
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-border/80 flex items-start justify-between gap-3 bg-muted/20">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className={`text-[10px] font-bold tracking-wider ${modalData.badgeClass}`}>
+                    {modalData.badgeText}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground font-mono">
+                    {modalData.totalCount} Capabilities
+                  </span>
+                </div>
+                <h2 className="text-lg sm:text-xl font-bold text-foreground">
+                  {modalData.title}
+                </h2>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  {modalData.subtitle}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setActiveBlockModal(null)}
+                className="h-8 w-8 p-0 rounded-full text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Filter & Search Toolbar */}
+            <div className="p-3 sm:p-4 border-b border-border/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-muted/10">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="Search capabilities, evidence snippets..."
+                  value={blockSearch}
+                  onChange={(e) => setBlockSearch(e.target.value)}
+                  className="pl-8 h-8 text-xs bg-background"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={blockCategoryFilter}
+                  onChange={(e) => setBlockCategoryFilter(e.target.value)}
+                  aria-label="Filter capabilities by category"
+                  className="h-8 text-xs rounded-md border border-input bg-background px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="ALL">All Categories ({modalData.totalCount})</option>
+                  {modalData.availableCategories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+                <Badge variant="secondary" className="text-[11px] font-mono shrink-0">
+                  Showing {modalData.items.length}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Modal Body: Scrollable Capabilities List */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-3 flex-1">
+              {modalData.items.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground text-xs">
+                  No capabilities match your search query or filter.
+                </div>
+              ) : (
+                modalData.items.map((item) => {
+                  const rivalsOffering = Object.entries(item.competitors || {})
+                    .filter(([_, c]) => c.depth === 'Full' || c.depth === 'Partial' || c.depth === 'Basic')
+                    .map(([name]) => name)
+                  const quotes = item.customerImportance?.representativeQuotes || []
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="border border-border/70 rounded-xl p-3.5 bg-muted/10 hover:bg-muted/20 transition-colors space-y-2.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <h3 className="font-semibold text-sm text-foreground truncate">
+                            {item.feature}
+                          </h3>
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground shrink-0">
+                            {item.category}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {/* Your Product Status */}
+                          <div className="flex items-center gap-1 text-[11px]">
+                            <span className="text-muted-foreground text-[10px]">Your Product:</span>
+                            <DepthBadge depth={item.myProduct.depth} />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Conclusion / Impact */}
+                      {item.conclusion && (
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          {item.conclusion}
+                        </p>
+                      )}
+
+                      {/* Evidence / Rivals Details */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1 border-t border-border/40">
+                        {/* Evidence from Your Product */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1">
+                            <Check className="h-3 w-3 text-primary" />
+                            <span>Your Verification</span>
+                          </span>
+                          <p className="text-[11px] text-muted-foreground/90 bg-muted/30 p-2 rounded border border-border/40">
+                            {item.myProduct.evidence?.snippet || 'Verified capability extracted from product specifications.'}
+                          </p>
+                        </div>
+
+                        {/* Rivals Offering or Quotes */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1">
+                            <Swords className="h-3 w-3 text-amber-400" />
+                            <span>Competitor Status</span>
+                          </span>
+                          <div className="text-[11px] text-muted-foreground bg-muted/30 p-2 rounded border border-border/40 space-y-1">
+                            {rivalsOffering.length > 0 ? (
+                              <div>
+                                <span className="font-medium text-foreground">
+                                  Offered by {rivalsOffering.length} rival{rivalsOffering.length === 1 ? '' : 's'}:
+                                </span>{' '}
+                                <span>{rivalsOffering.join(', ')}</span>
+                              </div>
+                            ) : (
+                              <span className="text-emerald-400 font-medium">
+                                Exclusive capability — Not offered by any tracked rival.
+                              </span>
+                            )}
+                            {item.customerImportance && (
+                              <div className="text-[10px] text-muted-foreground">
+                                Buyer Demand: <span className="font-medium text-foreground">{item.customerImportance.importanceScore}</span> ({item.customerImportance.customerMentions} buyer mentions)
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Customer Quotes if applicable */}
+                      {quotes.length > 0 && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[10px] uppercase font-bold text-amber-400 flex items-center gap-1">
+                            <Flame className="h-3 w-3" />
+                            <span>Buyer Quote Evidence</span>
+                          </span>
+                          <div className="space-y-1">
+                            {quotes.slice(0, 2).map((q, qIdx) => (
+                              <div
+                                key={qIdx}
+                                className="text-[11px] text-muted-foreground bg-amber-500/5 border border-amber-500/20 p-2 rounded italic"
+                              >
+                                “{q}”
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 sm:p-4 border-t border-border/80 bg-muted/20 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                Showing {modalData.items.length} of {modalData.totalCount} capabilities
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setActiveBlockModal(null)}
+                className="text-xs"
+              >
+                Close List
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

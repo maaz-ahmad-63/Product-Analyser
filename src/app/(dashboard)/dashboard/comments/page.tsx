@@ -28,6 +28,14 @@ import {
   MinusCircle,
   SlidersHorizontal,
 } from 'lucide-react'
+import { MetricExplainer } from '@/components/shared/metric-explainer'
+import { InteractiveTrendChart, TrendChartItem } from '@/components/shared/interactive-trend-chart'
+import {
+  MultiCompetitorTrendChart,
+  CompetitorSeriesConfig,
+  MultiTrendPoint,
+} from '@/components/shared/multi-competitor-trend-chart'
+import { ObservationDrilldownModal, ObservationPointData } from '@/components/shared/observation-drilldown-modal'
 
 type ModalType = 'problems' | 'sentiment' | 'comments' | 'features' | 'evidence' | 'methodology' | null
 
@@ -37,13 +45,14 @@ export default function CommentsPage() {
   // Modal state
   const [activeModal, setActiveModal] = useState<ModalType>(null)
   const [selectedClusterIndex, setSelectedClusterIndex] = useState<number>(0)
+  const [drilldownPoint, setDrilldownPoint] = useState<ObservationPointData | null>(null)
 
   // Product tab filter state
   const [selectedProductTab, setSelectedProductTab] = useState<string>('all')
 
   // Comments explorer filter states
   const [commentSearch, setCommentSearch] = useState('')
-  const [sentimentFilter, setSentimentFilter] = useState<'all' | 'positive' | 'neutral' | 'negative'>('all')
+  const [sentimentFilter, setSentimentFilter] = useState<string>('all')
   const [productFilter, setProductFilter] = useState<string>('all')
   const [topicFilter, setTopicFilter] = useState<string>('all')
 
@@ -122,10 +131,20 @@ export default function CommentsPage() {
   // Extract own product name & competitor list
   const ownProductName = currentProjectMeta?.ownProduct?.name || currentProjectData?.my_product?.productName || 'Your Product'
   const competitorsData: any[] = currentProjectData?.competitors_data || []
+  const myUrl = currentProjectData?.my_url || currentProjectMeta?.ownProduct?.url || ''
+
+  // Helper to identify own product
+  const isOwnProduct = (pName: string, pUrl?: string) => {
+    const p = (pName || '').toLowerCase()
+    if (myUrl && pUrl && (pUrl === myUrl || myUrl.includes(pUrl) || pUrl.includes(myUrl))) return true
+    if (p.includes('rideon')) return true
+    if (ownProductName && ownProductName !== 'Your Product' && p.includes(ownProductName.toLowerCase())) return true
+    return false
+  }
 
   // Horizontal product tabs (All vs Own Product vs Individual Competitors)
   const productTabs = useMemo(() => {
-    const list: { id: string; label: string; count: number; isOwn: boolean }[] = []
+    const list: { id: string; label: string; count: number; isOwn: boolean; url?: string }[] = []
 
     // 1. All Market Discussions
     list.push({
@@ -136,15 +155,6 @@ export default function CommentsPage() {
     })
 
     // 2. Your Product
-    const myUrl = currentProjectData?.my_url || currentProjectMeta?.ownProduct?.url || ''
-    const isOwnProduct = (pName: string, pUrl?: string) => {
-      const p = (pName || '').toLowerCase()
-      if (myUrl && pUrl && (pUrl === myUrl || myUrl.includes(pUrl) || pUrl.includes(myUrl))) return true
-      if (p.includes('rideon')) return true
-      if (ownProductName && ownProductName !== 'Your Product' && p.includes(ownProductName.toLowerCase())) return true
-      return false
-    }
-
     const ownComments = allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
     const ownShort = ownProductName.split('–')[0].split('-')[0].trim()
     list.push({
@@ -152,6 +162,7 @@ export default function CommentsPage() {
       label: `${ownShort} (Your Product)`,
       count: ownComments.length,
       isOwn: true,
+      url: myUrl,
     })
 
     // 3. Competitors
@@ -167,6 +178,7 @@ export default function CommentsPage() {
           label: shortName || p,
           count,
           isOwn: false,
+          url: c.product_url || undefined,
         })
       }
     })
@@ -175,12 +187,14 @@ export default function CommentsPage() {
       const name = comp.productName
       if (name && !seenNames.has(name) && !isOwnProduct(name, comp.url)) {
         seenNames.add(name)
+        const count = allComments.filter((cm) => cm.product_name === name || cm.product_url === comp.url).length
         const shortName = name.split('–')[0].split('-')[0].trim()
         list.push({
           id: name,
           label: shortName || name,
-          count: 0,
+          count,
           isOwn: false,
+          url: comp.url || undefined,
         })
       }
     })
@@ -232,17 +246,46 @@ export default function CommentsPage() {
     ? (allComments.length > 0 ? allComments.length : commentsAnalysis.total_analyzed)
     : activeComments.length
 
+  // Buyer inquiries (pre-sale questions, demo requests, license queries)
+  const inquiryCount = selectedProductTab === 'all' && commentsAnalysis.inquiry_count !== undefined
+    ? commentsAnalysis.inquiry_count
+    : activeComments.filter((c) =>
+        c.category_type === 'inquiry' ||
+        c.feedback_type === 'inquiry' ||
+        c.feedback_type === 'question' ||
+        (!c.is_actionable_complaint && (c.comment_text || '').includes('?') && c.sentiment !== 'positive')
+      ).length
+
+  // Real customer complaints & friction (excluding inquiries and author replies)
+  const negativeCount = selectedProductTab === 'all' && commentsAnalysis.complaint_count !== undefined
+    ? commentsAnalysis.complaint_count
+    : activeComments.filter((c) =>
+        c.is_actionable_complaint === true ||
+        (c.sentiment === 'negative' &&
+          c.category_type !== 'inquiry' &&
+          c.category_type !== 'author_reply' &&
+          c.feedback_type !== 'inquiry' &&
+          c.feedback_type !== 'question')
+      ).length
+
+  // Positive feedback
   const positiveCount = selectedProductTab === 'all' && commentsAnalysis.positive_count !== undefined
     ? commentsAnalysis.positive_count
-    : activeComments.filter((c) => c.sentiment === 'positive' || c.feedback_type === 'praise').length
+    : activeComments.filter((c) => c.sentiment === 'positive' || c.feedback_type === 'praise' || c.category_type === 'positive').length
 
-  const negativeCount = selectedProductTab === 'all' && commentsAnalysis.negative_count !== undefined
-    ? commentsAnalysis.negative_count
-    : activeComments.filter((c) => c.sentiment === 'negative' || c.feedback_type === 'complaint').length
+  // Suggestions & feature requests
+  const suggestionCount = selectedProductTab === 'all' && commentsAnalysis.suggestion_count !== undefined
+    ? commentsAnalysis.suggestion_count
+    : activeComments.filter((c) => c.category_type === 'suggestion' || c.feedback_type === 'suggestion' || c.feedback_type === 'feature_request').length
+
+  // Author replies
+  const authorReplyCount = selectedProductTab === 'all' && commentsAnalysis.author_reply_count !== undefined
+    ? commentsAnalysis.author_reply_count
+    : activeComments.filter((c) => c.category_type === 'author_reply').length
 
   const neutralCount = selectedProductTab === 'all' && commentsAnalysis.neutral_count !== undefined
     ? commentsAnalysis.neutral_count
-    : activeComments.filter((c) => c.sentiment === 'neutral').length
+    : activeComments.filter((c) => c.sentiment === 'neutral' || c.category_type === 'inquiry' || c.category_type === 'author_reply').length
 
   const recurringProblemsCount = activeClusters.length
 
@@ -325,13 +368,35 @@ export default function CommentsPage() {
       const author = (c.author_name || '').toLowerCase()
       const matchesSearch = !commentSearch || text.includes(commentSearch.toLowerCase()) || author.includes(commentSearch.toLowerCase())
 
+      const isComplaint =
+        c.is_actionable_complaint === true ||
+        (c.sentiment === 'negative' &&
+          c.category_type !== 'inquiry' &&
+          c.category_type !== 'author_reply' &&
+          c.feedback_type !== 'inquiry' &&
+          c.feedback_type !== 'question')
+      const isInquiry =
+        c.category_type === 'inquiry' ||
+        c.feedback_type === 'inquiry' ||
+        c.feedback_type === 'question' ||
+        (!isComplaint && (c.comment_text || '').includes('?') && c.sentiment !== 'positive')
+      const isPositive = c.sentiment === 'positive' || c.feedback_type === 'praise' || c.category_type === 'positive'
+      const isSuggestion = c.category_type === 'suggestion' || c.feedback_type === 'suggestion' || c.feedback_type === 'feature_request'
+      const isAuthor = c.category_type === 'author_reply'
+
       const matchesSentiment =
         sentimentFilter === 'all'
           ? true
+          : sentimentFilter === 'inquiry'
+          ? isInquiry
           : sentimentFilter === 'positive'
-          ? c.sentiment === 'positive' || c.feedback_type === 'praise'
-          : sentimentFilter === 'negative'
-          ? c.sentiment === 'negative' || c.feedback_type === 'complaint'
+          ? isPositive
+          : sentimentFilter === 'negative' || sentimentFilter === 'complaint'
+          ? isComplaint
+          : sentimentFilter === 'suggestion'
+          ? isSuggestion
+          : sentimentFilter === 'author'
+          ? isAuthor
           : c.sentiment === 'neutral'
 
       const matchesProduct = productFilter === 'all' || c.product_name === productFilter
@@ -381,6 +446,172 @@ export default function CommentsPage() {
     return `${topCluster?.mentions || 0} customer mentions highlight friction in this area, representing a prime displacement angle to win switching buyers.`
   }, [selectedProductTab, hasCommentsData, totalComments, activeClusters.length, topCluster])
 
+  // Chronological discussion trend (Progressive Disclosure Level 2 Graph)
+  const trendChartData: TrendChartItem[] = useMemo(() => {
+    if (!activeComments || activeComments.length === 0) return []
+
+    const getDaysAgo = (dateStr?: string): number => {
+      if (!dateStr) return 999
+      const s = dateStr.toLowerCase().trim()
+      if (s.includes('today') || s.includes('hour') || s.includes('minute')) return 0
+      if (s.includes('yesterday')) return 1
+      const mDays = s.match(/(\d+)\s*day/)
+      if (mDays) return parseInt(mDays[1], 10)
+      const mWeeks = s.match(/(\d+)\s*week/)
+      if (mWeeks) return parseInt(mWeeks[1], 10) * 7
+      const mMonths = s.match(/(\d+)\s*month/)
+      if (mMonths) return parseInt(mMonths[1], 10) * 30
+      const mYears = s.match(/(\d+)\s*year/)
+      if (mYears) return parseInt(mYears[1], 10) * 365
+      const ts = new Date(dateStr).getTime()
+      if (!isNaN(ts)) {
+        return Math.max(0, Math.round((Date.now() - ts) / (1000 * 60 * 60 * 24)))
+      }
+      return 999
+    }
+
+    const windows = [
+      { id: 'w1', label: '60+ days ago', min: 61, max: 9999 },
+      { id: 'w2', label: '31-60 days ago', min: 31, max: 60 },
+      { id: 'w3', label: '15-30 days ago', min: 15, max: 30 },
+      { id: 'w4', label: '8-14 days ago', min: 8, max: 14 },
+      { id: 'w5', label: 'Last 7 days', min: 0, max: 7 },
+    ]
+
+    const buckets: TrendChartItem[] = []
+    let prevVal: number | null = null
+
+    for (const win of windows) {
+      const matched = activeComments.filter((c) => {
+        const d = getDaysAgo(c.comment_date || c.collected_at)
+        return d >= win.min && d <= win.max
+      })
+
+      if (matched.length > 0) {
+        const inquiries = matched.filter(
+          (c) =>
+            c.category_type === 'inquiry' ||
+            c.feedback_type === 'inquiry' ||
+            (!c.is_actionable_complaint && (c.comment_text || '').includes('?'))
+        ).length
+        const complaints = matched.filter((c) => c.is_actionable_complaint === true).length
+        const delta = prevVal !== null ? matched.length - prevVal : null
+        const growthPercentage = prevVal !== null && prevVal > 0 ? ((matched.length - prevVal) / prevVal) * 100 : null
+
+        buckets.push({
+          id: win.id,
+          date: win.label,
+          formattedDate: win.label,
+          value: matched.length,
+          previousValue: prevVal,
+          delta,
+          growthPercentage,
+          observationType: 'discussion',
+          observationSummary: `${matched.length} customer discussions observed during ${win.label} (${inquiries} inquiries, ${complaints} complaints).`,
+          rawItem: {
+            evidence: matched.slice(0, 10).map((c) => ({
+              author: c.author_name || 'Buyer',
+              text: c.comment_text || c.text || '',
+              date: c.comment_date || '',
+              sentiment: c.sentiment || 'neutral',
+              category: c.category_type || c.topic_label || 'Discussion',
+              url: c.product_url || null,
+            })),
+            relatedEvents: [
+              {
+                title: `${inquiries} Buyer Inquiries`,
+                description: `Pre-sale queries & feature questions recorded during ${win.label}.`,
+                impact: 'neutral',
+              },
+              ...(complaints > 0
+                ? [
+                    {
+                      title: `${complaints} Customer Complaints`,
+                      description: `Friction or setup hurdles identified during ${win.label}.`,
+                      impact: 'negative',
+                    },
+                  ]
+                : []),
+            ],
+            sourceUrl: currentProjectData?.my_url || undefined,
+          },
+        })
+
+        prevVal = matched.length
+      }
+    }
+
+    return buckets
+  }, [activeComments, currentProjectData])
+
+  // Multi-competitor mixed discussion volume comparison (when "All Products & Market" tab is selected)
+  const multiDiscussionTrendResult = useMemo(() => {
+    const allProdTabs = productTabs.filter((t) => t.id !== 'all')
+    const compColors = ['#10b981', '#06b6d4', '#a855f7', '#f43f5e', '#f97316', '#3b82f6']
+
+    const series: CompetitorSeriesConfig[] = allProdTabs.map((t, idx) => ({
+      id: t.id,
+      name: t.label.split('–')[0].split('-')[0].trim(),
+      color: compColors[idx % compColors.length],
+      dataKey: `prod_${idx}`,
+      isOwn: t.id === 'own',
+    }))
+
+    const windows = [
+      { id: 'win_1', label: '60+ days ago', daysAgo: 75, match: (d: string) => d.includes('month') || d.includes('year') || (d.includes('day') && parseInt(d, 10) > 60) },
+      { id: 'win_2', label: '31–60 days ago', daysAgo: 45, match: (d: string) => d.includes('day') && parseInt(d, 10) > 30 && parseInt(d, 10) <= 60 },
+      { id: 'win_3', label: '15–30 days ago', daysAgo: 22, match: (d: string) => d.includes('day') && parseInt(d, 10) > 14 && parseInt(d, 10) <= 30 },
+      { id: 'win_4', label: '8–14 days ago', daysAgo: 11, match: (d: string) => d.includes('day') && parseInt(d, 10) > 7 && parseInt(d, 10) <= 14 },
+      { id: 'win_5', label: 'Last 7 days', daysAgo: 3, match: (d: string) => d.includes('hour') || d.includes('minute') || d.includes('just') || (d.includes('day') && parseInt(d, 10) <= 7) },
+    ]
+
+    const data: MultiTrendPoint[] = []
+
+    for (const win of windows) {
+      const point: MultiTrendPoint = {
+        date: new Date(Date.now() - win.daysAgo * 86400000).toISOString(),
+        formattedDate: win.label,
+        metaBySeries: {},
+      }
+
+      allProdTabs.forEach((tab, idx) => {
+        const key = `prod_${idx}`
+        const prodComments = tab.id === 'own'
+          ? allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
+          : allComments.filter((c) => c.product_name === tab.id || (tab.url && c.product_url === tab.url))
+
+        const matched = prodComments.filter((c) => {
+          const d = (c.comment_date || '').toLowerCase()
+          return win.match(d)
+        })
+
+        const count = matched.length
+        point[key] = count
+
+        if (point.metaBySeries) {
+          const inquiries = matched.filter((c) => c.category_type === 'inquiry').length
+          const complaints = matched.filter((c) => c.category_type === 'complaint' || c.sentiment === 'negative').length
+          point.metaBySeries[key] = {
+            value: count,
+            observationSummary: `${count} buyer discussions observed for ${tab.label} during ${win.label} (${inquiries} inquiries, ${complaints} complaints).`,
+            sourceUrl: tab.url || currentProjectData?.my_url,
+            evidence: matched.slice(0, 5).map((c) => ({
+              author: c.author_name || 'Buyer',
+              text: c.comment_text || c.text || '',
+              date: c.comment_date || '',
+              sentiment: c.sentiment || 'neutral',
+              category: c.category_type || 'Discussion',
+            })),
+          }
+        }
+      })
+
+      data.push(point)
+    }
+
+    return { series, data }
+  }, [productTabs, allComments, currentProjectData, isOwnProduct])
+
   // Conditional early returns (MUST BE AFTER ALL HOOKS)
   if (isLoading) {
     return (
@@ -411,7 +642,13 @@ export default function CommentsPage() {
     )
   }
 
+  const inquiryPercent = totalComments && totalComments > 0 && inquiryCount !== undefined
+    ? Math.round((inquiryCount / totalComments) * 100)
+    : 0
 
+  const frictionPercent = totalComments && totalComments > 0 && negativeCount !== undefined
+    ? Math.round((negativeCount / Math.max(totalComments - authorReplyCount, 1)) * 100)
+    : 0
 
   return (
     <div className="space-y-6 animate-fade-in pb-12 max-w-5xl">
@@ -448,23 +685,14 @@ export default function CommentsPage() {
                 onClick={() => setSelectedProductTab(tab.id)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-t-lg transition-all flex items-center gap-1.5 border-b-2 shrink-0 ${
                   isSelected
-                    ? 'border-primary text-foreground bg-muted/30 font-bold'
+                    ? 'border-primary text-foreground font-semibold bg-muted/30'
                     : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/10'
                 }`}
               >
                 <span>{tab.label}</span>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] px-1.5 py-0 ${
-                    tab.isOwn
-                      ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10 font-bold'
-                      : isSelected
-                      ? 'border-primary/40 text-primary bg-primary/10'
-                      : 'border-border text-muted-foreground bg-muted/20'
-                  }`}
-                >
-                  {tab.isOwn ? 'Your Product' : tab.count}
-                </Badge>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground">
+                  {tab.count}
+                </span>
               </button>
             )
           })}
@@ -472,55 +700,169 @@ export default function CommentsPage() {
       </div>
 
       {/* ========================================================================= */}
-      {/* 2. KEY NUMBERS (3–4 compact metrics) */}
+      {/* 2. KEY NUMBERS (3–4 compact metrics with Explainable Percentages & Interactive Modals) */}
       {/* ========================================================================= */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {/* Discussions analyzed */}
-        <Card className="border-border bg-card p-3.5 space-y-1 shadow-sm">
-          <div className="text-[11px] font-medium text-muted-foreground">Discussions analyzed</div>
+        <Card
+          onClick={() => {
+            setSentimentFilter('all')
+            setActiveModal('comments')
+          }}
+          className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-primary/60 hover:bg-muted/20 transition-all group"
+        >
+          <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+            <span>Discussions analyzed</span>
+            <span className="text-[9px] text-muted-foreground/70 group-hover:text-primary">All posts →</span>
+          </div>
           <div className="text-2xl font-bold text-foreground">
             {totalComments !== undefined ? totalComments : 'Not available'}
           </div>
           <div className="text-[10px] text-muted-foreground">Total posts collected</div>
         </Card>
 
-        {/* Customer complaints */}
-        <Card className="border-border bg-card p-3.5 space-y-1 shadow-sm">
-          <div className="text-[11px] font-medium text-muted-foreground">Customer complaints</div>
-          <div className="text-2xl font-bold text-rose-400 flex items-center gap-1.5">
-            <ThumbsDown className="h-4 w-4" />
-            <span>{negativeCount !== undefined ? negativeCount : 'Not available'}</span>
+        {/* Buyer Inquiries */}
+        <Card
+          onClick={() => {
+            setSentimentFilter('inquiry')
+            setActiveModal('comments')
+          }}
+          className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-blue-500/60 hover:bg-muted/20 transition-all group"
+        >
+          <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+            <span>Buyer Inquiries</span>
+            <span className="text-[9px] text-muted-foreground/70 group-hover:text-blue-400">Inquiries →</span>
           </div>
+          <MetricExplainer
+            explanation={{
+              label: 'Buyer Inquiry Share',
+              currentValue: `${inquiryCount !== undefined ? inquiryCount : 0} (${inquiryPercent}%)`,
+              previousValue: totalComments ? `${totalComments} total discussions` : null,
+              formula: `(${inquiryCount || 0} inquiries ÷ ${totalComments || 1} total discussions) × 100`,
+              result: `${inquiryPercent}%`,
+              source: 'Natural language classifier applied to public discussion threads',
+              notes: 'Pre-sale questions, demo requests, and developer inquiries.',
+            }}
+          >
+            <div className="text-2xl font-bold text-blue-400 flex items-center gap-1.5">
+              <HelpCircle className="h-4 w-4" />
+              <span>{inquiryCount !== undefined ? inquiryCount : 'Not available'}</span>
+            </div>
+          </MetricExplainer>
           <div className="text-[10px] text-muted-foreground">
-            {totalComments && totalComments > 0 && negativeCount !== undefined
-              ? `${Math.round((negativeCount / totalComments) * 100)}% of discussions`
-              : 'Negative sentiment'}
+            {inquiryPercent}% of all discussions
           </div>
         </Card>
 
-        {/* Positive feedback */}
-        <Card className="border-border bg-card p-3.5 space-y-1 shadow-sm">
-          <div className="text-[11px] font-medium text-muted-foreground">Positive feedback</div>
-          <div className="text-2xl font-bold text-emerald-400 flex items-center gap-1.5">
-            <ThumbsUp className="h-4 w-4" />
-            <span>{positiveCount !== undefined ? positiveCount : 'Not available'}</span>
+        {/* Customer complaints */}
+        <Card
+          onClick={() => {
+            setSentimentFilter('negative')
+            setActiveModal('comments')
+          }}
+          className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-rose-500/60 hover:bg-muted/20 transition-all group"
+        >
+          <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+            <span>Customer complaints</span>
+            <span className="text-[9px] text-muted-foreground/70 group-hover:text-rose-400">Complaints →</span>
           </div>
+          <MetricExplainer
+            explanation={{
+              label: 'Actionable Friction Rate',
+              currentValue: `${negativeCount !== undefined ? negativeCount : 0} (${frictionPercent}%)`,
+              previousValue: `${Math.max((totalComments || 0) - authorReplyCount, 1)} buyer posts`,
+              formula: `(${negativeCount || 0} actionable complaints ÷ ${Math.max((totalComments || 0) - authorReplyCount, 1)} customer posts) × 100`,
+              result: `${frictionPercent}%`,
+              source: 'Verified actionable complaints (excludes pre-sale questions & replies)',
+              notes: 'Represents verified defects, setup friction, or missing capabilities.',
+            }}
+          >
+            <div className="text-2xl font-bold text-rose-400 flex items-center gap-1.5">
+              <ThumbsDown className="h-4 w-4" />
+              <span>{negativeCount !== undefined ? negativeCount : 'Not available'}</span>
+            </div>
+          </MetricExplainer>
           <div className="text-[10px] text-muted-foreground">
-            {totalComments && totalComments > 0 && positiveCount !== undefined
-              ? `${Math.round((positiveCount / totalComments) * 100)}% satisfied buyers`
-              : 'Positive sentiment'}
+            {frictionPercent}% friction rate
           </div>
         </Card>
 
         {/* Recurring problems */}
-        <Card className="border-border bg-card p-3.5 space-y-1 shadow-sm">
-          <div className="text-[11px] font-medium text-muted-foreground">Recurring problems</div>
+        <Card
+          onClick={() => {
+            setActiveModal('problems')
+          }}
+          className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-purple-500/60 hover:bg-muted/20 transition-all group"
+        >
+          <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+            <span>Recurring problems</span>
+            <span className="text-[9px] text-muted-foreground/70 group-hover:text-purple-400">Clusters →</span>
+          </div>
           <div className="text-2xl font-bold text-purple-400">
             {clusters !== undefined ? recurringProblemsCount : 'Not available'}
           </div>
           <div className="text-[10px] text-muted-foreground">Semantic problem clusters</div>
         </Card>
       </div>
+
+      {/* ========================================================================= */}
+      {/* 2.1 DISCUSSION ACTIVITY & TREND (Multi-Line Mixed Graph OR Single Focus) */}
+      {/* ========================================================================= */}
+      {selectedProductTab === 'all' && multiDiscussionTrendResult.data.length > 0 ? (
+        <Card className="border-border bg-card p-4 sm:p-5 shadow-sm space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                  Discussion Activity & Volume: All Competitors vs You
+                </h3>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Chronological observation of buyer discussions across all marketplace competitors. Click any point to drill down into underlying topics and quotes.
+              </p>
+            </div>
+            <Badge variant="outline" className="text-[10px] text-muted-foreground font-mono shrink-0">
+              {multiDiscussionTrendResult.series.length} tracked products • {multiDiscussionTrendResult.data.length} observation windows
+            </Badge>
+          </div>
+
+          <MultiCompetitorTrendChart
+            series={multiDiscussionTrendResult.series}
+            data={multiDiscussionTrendResult.data}
+            metricLabel="Discussions"
+            height={210}
+            onSelectPoint={(pt) => setDrilldownPoint(pt)}
+          />
+        </Card>
+      ) : trendChartData.length > 0 ? (
+        <Card className="border-border bg-card p-4 sm:p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                  Discussion Activity & Volume Over Time
+                </h3>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Chronological observation of buyer discussions for {selectedProductTab === 'own' ? 'your product' : selectedProductTab}. Click any point to drill down into underlying topics and quotes.
+              </p>
+            </div>
+            <Badge variant="outline" className="text-[10px] text-muted-foreground font-mono">
+              {trendChartData.length} observation windows
+            </Badge>
+          </div>
+
+          <InteractiveTrendChart
+            data={trendChartData}
+            metricLabel="Discussions"
+            color="#38bdf8"
+            height={190}
+            onSelectPoint={(pt) => setDrilldownPoint(pt)}
+          />
+        </Card>
+      ) : null}
 
       {/* ========================================================================= */}
       {/* 3. MAIN ANALYSIS — WHAT WE FOUND (Compact, readable in 5 seconds) */}
@@ -1056,16 +1398,18 @@ export default function CommentsPage() {
                   />
                 </div>
 
-                {/* Sentiment selector */}
+                {/* Category / Sentiment selector */}
                 <select
                   value={sentimentFilter}
                   onChange={(e) => setSentimentFilter(e.target.value as any)}
                   className="h-8 text-xs rounded-md border border-border bg-card px-2.5 text-foreground"
                 >
-                  <option value="all">All Sentiments ({allComments.length})</option>
-                  <option value="negative">Complaints ({negativeCount})</option>
-                  <option value="positive">Positive ({positiveCount})</option>
-                  <option value="neutral">Neutral ({neutralCount})</option>
+                  <option value="all">All Feedback ({allComments.length})</option>
+                  <option value="inquiry">Buyer Inquiries ({inquiryCount})</option>
+                  <option value="negative">Complaints & Friction ({negativeCount})</option>
+                  <option value="suggestion">Feature Requests ({suggestionCount})</option>
+                  <option value="positive">Positive / Praise ({positiveCount})</option>
+                  {authorReplyCount > 0 && <option value="author">Developer Replies ({authorReplyCount})</option>}
                 </select>
 
                 {/* Topic selector if multiple */}
@@ -1110,29 +1454,50 @@ export default function CommentsPage() {
                   <p>Try broadening your search term or adjusting sentiment and topic filters.</p>
                 </div>
               ) : (
-                filteredComments.map((c, idx) => (
-                  <div key={idx} className="p-3 rounded-lg border border-border bg-card hover:bg-muted/10 transition-colors space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-semibold text-foreground truncate">{c.author_name || 'Buyer'}</span>
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] px-1.5 py-0 shrink-0 ${
-                            c.sentiment === 'positive' || c.feedback_type === 'praise'
-                              ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-                              : c.sentiment === 'negative' || c.feedback_type === 'complaint'
-                              ? 'text-rose-400 border-rose-500/30 bg-rose-500/10'
-                              : 'text-muted-foreground border-border'
-                          }`}
-                        >
-                          {c.sentiment || c.feedback_type || 'neutral'}
-                        </Badge>
-                        {c.topic_label && (
-                          <span className="text-muted-foreground text-[10px] hidden sm:inline truncate">
-                            • {c.topic_label}
-                          </span>
-                        )}
-                      </div>
+                filteredComments.map((c, idx) => {
+                  const isAuthor = c.category_type === 'author_reply'
+                  const isComplaint =
+                    c.is_actionable_complaint === true ||
+                    (c.sentiment === 'negative' && c.category_type !== 'inquiry' && c.category_type !== 'author_reply')
+                  const isSuggestion = c.category_type === 'suggestion' || c.feedback_type === 'suggestion'
+                  const isPraise = c.sentiment === 'positive' || c.feedback_type === 'praise' || c.category_type === 'positive'
+                  const isInquiry = !isAuthor && !isComplaint && !isSuggestion && !isPraise
+
+                  return (
+                    <div key={idx} className="p-3 rounded-lg border border-border bg-card hover:bg-muted/10 transition-colors space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px] gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-semibold text-foreground truncate">{c.author_name || 'Buyer'}</span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] px-1.5 py-0 shrink-0 font-bold ${
+                              isAuthor
+                                ? 'text-muted-foreground border-border bg-muted/20'
+                                : isInquiry
+                                ? 'text-blue-400 border-blue-500/30 bg-blue-500/10'
+                                : isSuggestion
+                                ? 'text-purple-400 border-purple-500/30 bg-purple-500/10'
+                                : isComplaint
+                                ? 'text-rose-400 border-rose-500/30 bg-rose-500/10'
+                                : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                            }`}
+                          >
+                            {isAuthor
+                              ? 'AUTHOR REPLY'
+                              : isInquiry
+                              ? 'BUYER INQUIRY'
+                              : isSuggestion
+                              ? 'FEATURE REQUEST'
+                              : isComplaint
+                              ? 'COMPLAINT'
+                              : 'PRAISE'}
+                          </Badge>
+                          {c.topic_label && (
+                            <span className="text-muted-foreground text-[10px] hidden sm:inline truncate">
+                              • {c.topic_label}
+                            </span>
+                          )}
+                        </div>
                       <span className="text-[10px] text-muted-foreground shrink-0">
                         {c.comment_date || (c.published_at ? new Date(c.published_at).toLocaleDateString() : 'Marketplace discussion')}
                       </span>
@@ -1148,8 +1513,8 @@ export default function CommentsPage() {
                       </div>
                     )}
                   </div>
-                ))
-              )}
+                )
+              }))}
             </div>
 
             <div className="p-3 sm:p-4 border-t border-border flex justify-end bg-muted/20 shrink-0">
@@ -1400,6 +1765,9 @@ export default function CommentsPage() {
           </div>
         </div>
       )}
+
+      {/* Observation Point Drill-Down Modal (Summary -> Graph -> Event -> Evidence) */}
+      <ObservationDrilldownModal data={drilldownPoint} onClose={() => setDrilldownPoint(null)} />
     </div>
   )
 }

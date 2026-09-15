@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 
 export interface ProjectSummary {
   id: string
@@ -26,6 +26,7 @@ export interface ProjectContextType {
   currentProjectData: any | null
   setCurrentProjectId: (id: string) => void
   isLoading: boolean
+  isSwitching: boolean
   refreshProjects: () => Promise<void>
 }
 
@@ -36,6 +37,7 @@ const ProjectContext = createContext<ProjectContextType>({
   currentProjectData: null,
   setCurrentProjectId: () => {},
   isLoading: true,
+  isSwitching: false,
   refreshProjects: async () => {},
 })
 
@@ -45,29 +47,70 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [currentProjectMeta, setCurrentProjectMeta] = useState<any | null>(null)
   const [currentProjectData, setCurrentProjectData] = useState<any | null>(null)
   const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [isSwitching, setIsSwitching] = useState<boolean>(false)
 
-  const setCurrentProjectId = useCallback((id: string) => {
-    setCurrentProjectIdState(id)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('sga_active_project_id', id)
-    }
-  }, [])
+  // In-memory cache for fetched project data
+  const projectCacheRef = useRef<Map<string, { meta: any; data: any }>>(new Map())
 
   const fetchProjectDetails = useCallback(async (id: string) => {
+    // Return cached data immediately if available
+    if (projectCacheRef.current.has(id)) {
+      const cached = projectCacheRef.current.get(id)!
+      setCurrentProjectMeta(cached.meta)
+      setCurrentProjectData(cached.data)
+      setIsSwitching(false)
+      setIsLoading(false)
+      return
+    }
+
     try {
+      setIsSwitching(true)
       const res = await fetch(`/api/analyses/${id}`)
       if (!res.ok) return
       const json = await res.json()
-      setCurrentProjectMeta(json.analysis || null)
-      setCurrentProjectData(json.data || null)
+      const meta = json.analysis || null
+      const data = json.data || null
+
+      // Save to cache
+      projectCacheRef.current.set(id, { meta, data })
+      setCurrentProjectMeta(meta)
+      setCurrentProjectData(data)
     } catch (err) {
       console.error(`Failed to load project details for ${id}:`, err)
+    } finally {
+      setIsSwitching(false)
+      setIsLoading(false)
     }
   }, [])
+
+  const setCurrentProjectId = useCallback((id: string) => {
+    if (id === currentProjectId) return
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sga_active_project_id', id)
+    }
+
+    // Instant switch if already cached
+    if (projectCacheRef.current.has(id)) {
+      const cached = projectCacheRef.current.get(id)!
+      setCurrentProjectIdState(id)
+      setCurrentProjectMeta(cached.meta)
+      setCurrentProjectData(cached.data)
+      setIsSwitching(false)
+      return
+    }
+
+    // Show buffering immediately while fetching
+    setIsSwitching(true)
+    setCurrentProjectIdState(id)
+  }, [currentProjectId])
 
   const refreshProjects = useCallback(async () => {
     try {
       setIsLoading(true)
+      // Clear cache on explicit full refresh
+      projectCacheRef.current.clear()
+
       const res = await fetch('/api/analyses')
       if (!res.ok) return
       const json = await res.json()
@@ -96,6 +139,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       console.error('Failed to load projects list:', err)
     } finally {
       setIsLoading(false)
+      setIsSwitching(false)
     }
   }, [fetchProjectDetails])
 
@@ -104,11 +148,21 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     refreshProjects()
   }, [refreshProjects])
 
-  // Fetch full details whenever currentProjectId changes
+  // Fetch details whenever currentProjectId changes
   useEffect(() => {
     if (!currentProjectId) {
       setCurrentProjectMeta(null)
       setCurrentProjectData(null)
+      setIsSwitching(false)
+      return
+    }
+
+    // If already in cache and already set, do nothing
+    if (projectCacheRef.current.has(currentProjectId)) {
+      const cached = projectCacheRef.current.get(currentProjectId)!
+      setCurrentProjectMeta(cached.meta)
+      setCurrentProjectData(cached.data)
+      setIsSwitching(false)
       return
     }
 
@@ -124,6 +178,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
         currentProjectData,
         setCurrentProjectId,
         isLoading,
+        isSwitching,
         refreshProjects,
       }}
     >
@@ -139,3 +194,4 @@ export function useProject() {
   }
   return context
 }
+

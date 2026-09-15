@@ -9,6 +9,7 @@ import {
   Check,
   LogOut,
   User as UserIcon,
+  Loader2,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -18,16 +19,30 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
 import { useProject } from '@/context/project-provider'
+import { GlobalSearchModal } from '@/components/shared/global-search-modal'
 
 export function AppHeader() {
   const pathname = usePathname()
   const { data: session } = useSession()
-  const { projects, currentProjectId, currentProjectMeta, setCurrentProjectId } = useProject()
+  const { projects, currentProjectId, currentProjectMeta, setCurrentProjectId, isSwitching } = useProject()
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
   const activeName = currentProjectMeta?.name || (projects.length > 0 ? projects[0].name : 'Select Project')
+
+  // Global ⌘K / Ctrl+K shortcut to toggle search modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setIsSearchOpen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const userName = session?.user?.name || session?.user?.email?.split('@')[0] || 'User'
   const userEmail = session?.user?.email || 'user@domain.com'
@@ -45,7 +60,14 @@ export function AppHeader() {
       : 'Overview'
 
   return (
-    <header className="sticky top-0 z-30 flex h-12 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur-sm">
+    <header className="sticky top-0 z-30 flex h-12 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur-sm relative">
+      {/* Top Buffering / Progress Bar during workspace switch */}
+      {isSwitching && (
+        <div className="absolute top-0 left-0 right-0 h-[2px] z-50 overflow-hidden bg-primary/20">
+          <div className="h-full w-full bg-gradient-to-r from-primary via-emerald-400 to-primary animate-pulse" />
+        </div>
+      )}
+
       {/* Left: Breadcrumbs + Workspace Switcher */}
       <div className="flex items-center gap-3">
         {/* Organization Switcher */}
@@ -54,9 +76,13 @@ export function AppHeader() {
             <Button
               variant="outline"
               size="sm"
-              className="h-7 gap-1.5 px-2 text-xs font-semibold text-foreground border-border bg-card/60"
+              className="h-7 gap-1.5 px-2 text-xs font-semibold text-foreground border-border bg-card/60 transition-all duration-150"
             >
-              <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
+              {isSwitching ? (
+                <Loader2 className="h-3.5 w-3.5 text-primary animate-spin shrink-0" />
+              ) : (
+                <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
+              )}
               <span className="truncate max-w-[120px] sm:max-w-[160px]">
                 {activeName}
               </span>
@@ -80,7 +106,11 @@ export function AppHeader() {
                 >
                   <span className="truncate max-w-[190px]">{p.name}</span>
                   {p.id === currentProjectId && (
-                    <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />
+                    isSwitching ? (
+                      <Loader2 className="h-3.5 w-3.5 text-primary animate-spin shrink-0 ml-1" />
+                    ) : (
+                      <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />
+                    )
                   )}
                 </DropdownMenuItem>
               ))
@@ -108,7 +138,8 @@ export function AppHeader() {
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-2 px-2.5 text-xs text-muted-foreground border-border bg-card/40 hover:text-foreground hidden md:flex"
+          onClick={() => setIsSearchOpen(true)}
+          className="h-7 gap-2 px-2.5 text-xs text-muted-foreground border-border bg-card/40 hover:text-foreground hidden md:flex cursor-pointer transition-colors"
         >
           <Search className="h-3.5 w-3.5" />
           <span>Search competitors, changes...</span>
@@ -212,6 +243,9 @@ export function AppHeader() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Global Search & Command Palette Modal */}
+      <GlobalSearchModal open={isSearchOpen} onOpenChange={setIsSearchOpen} />
     </header>
   )
 }

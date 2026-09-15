@@ -104,6 +104,21 @@ export async function GET(
       analyzedData = null
     }
 
+    // Auto-Catchup: If analysis is completed and >= 60 minutes have elapsed since last check (e.g. system was off overnight),
+    // trigger a non-blocking background check so new sales and changes are captured immediately without manual refresh.
+    const lastCheck = record.lastActivityCheckAt || record.lastRefreshedAt
+    const isStale = !lastCheck || (Date.now() - new Date(lastCheck).getTime() >= 60 * 60 * 1000)
+    if (isStale && record.status === 'completed' && record.autoRefreshEnabled !== false) {
+      import('@/services/activity-monitor/scheduler')
+        .then(({ activityScheduler }) => {
+          console.log(`[Auto-Catchup] Stale analysis detected for ${id} (last check: ${lastCheck || 'never'}). Triggering background sync...`)
+          activityScheduler.runMonitoringCycle(id).catch((err) => {
+            console.error(`[Auto-Catchup] Background sync error for ${id}:`, err)
+          })
+        })
+        .catch((err) => console.error('[Auto-Catchup] Import error:', err))
+    }
+
     return NextResponse.json(
       {
         analysis: formatAnalysis(record),

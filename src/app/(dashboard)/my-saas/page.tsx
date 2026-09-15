@@ -29,6 +29,8 @@ import {
   Clock,
   ArrowUpRight,
   Eye,
+  MessageSquare,
+  Star as StarIcon,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -71,29 +73,37 @@ function getProductPrice(prod?: any): string {
 function getProductNumericPrice(prod?: any): number {
   if (!prod) return 0
   const ep = prod.envatoSales?.product_price || prod.envatoSales?.price
-  if (ep) return parseNumericPrice(ep)
-  const pp = prod.pricingPlans?.[0]
-  if (pp) {
-    const raw = pp.price || pp.pricePerMonth || pp.priceMonthly || pp.priceAnnual
-    if (raw) return parseNumericPrice(raw)
-  }
-  return 0
+  const p = prod.envatoSales?.product_price || prod.price
+  if (typeof p === 'number') return p
+  if (!p) return 0
+  const match = String(p).match(/[\d,.]+(\.\d+)?/)
+  if (!match) return 0
+  return parseFloat(match[0].replace(/,/g, '')) || 0
 }
 
-function getProductSales(prod?: any): string {
-  if (!prod) return 'Not available'
-  const s = prod.envatoSales?.current_total_sales ?? prod.envatoSales?.totalSales ?? prod.envatoSales?.total_sales
-  if (s !== null && s !== undefined && typeof s === 'number') {
-    return s.toLocaleString()
+function getProductSales(prod?: any, salesAnalysis?: any): string {
+  if (!prod && !salesAnalysis) return 'Not available'
+  const s = prod?.envatoSales?.total_sales ?? prod?.sales ?? prod?.current_sales
+  if (s !== null && s !== undefined && !isNaN(Number(s))) {
+    return `${Number(s).toLocaleString()} sales`
+  }
+  // Fallback: use current_sales or total_sales from the sales analysis snapshot
+  const cs = salesAnalysis?.current_sales ?? salesAnalysis?.total_sales ?? prod?.current_sales
+  if (cs !== null && cs !== undefined && !isNaN(Number(cs))) {
+    return `${Number(cs).toLocaleString()} sales`
   }
   return 'Not available'
 }
 
-function getProductNumericSales(prod?: any): number {
-  if (!prod) return 0
-  const s = prod.envatoSales?.current_total_sales ?? prod.envatoSales?.totalSales ?? prod.envatoSales?.total_sales
-  if (s !== null && s !== undefined && typeof s === 'number') {
-    return s
+function getProductNumericSales(prod?: any, salesAnalysis?: any): number {
+  if (!prod && !salesAnalysis) return 0
+  const s = prod?.envatoSales?.total_sales ?? prod?.sales ?? prod?.current_sales
+  if (s !== null && s !== undefined && !isNaN(Number(s))) {
+    return Number(s)
+  }
+  const cs = salesAnalysis?.current_sales ?? salesAnalysis?.total_sales ?? prod?.current_sales
+  if (cs !== null && cs !== undefined && !isNaN(Number(cs))) {
+    return Number(cs)
   }
   return 0
 }
@@ -120,7 +130,14 @@ export default function MySaaSPage() {
   const { currentProjectId, currentProjectMeta, currentProjectData, isLoading, projects, refreshProjects } = useProject()
   const [timeRange, setTimeRange] = useState<'today' | '7d' | '30d' | 'all'>('7d')
   const [chartMetric, setChartMetric] = useState<'price' | 'sales' | 'rating'>('sales')
-  const [hoveredCompetitor, setHoveredCompetitor] = useState<any | null>(null)
+  const [selectedProductKey, setSelectedProductKey] = useState<string>('target')
+
+  const [eventsModalOpen, setEventsModalOpen] = useState(false)
+  const [eventsModalFilter, setEventsModalFilter] = useState<string>('all')
+  const [eventsModalTypeFilter, setEventsModalTypeFilter] = useState<'all'|'sale'|'review'|'comment'>('all')
+  const [eventsModalSearch, setEventsModalSearch] = useState<string>('')
+  const [eventTypeFilter, setEventTypeFilter] = useState<'all' | 'sale' | 'review' | 'comment'>('all')
+  const [timelineOpen, setTimelineOpen] = useState(true)
   const [mounted, setMounted] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -132,6 +149,202 @@ export default function MySaaSPage() {
   React.useEffect(() => {
     setMounted(true)
   }, [])
+
+  // Close modal on Escape
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEventsModalOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // ── Derived data (with safe fallbacks so all hooks run before any early return) ──
+  const myProduct = currentProjectData?.my_product || {}
+  const competitorRows: any[] = currentProjectData?.multi_sales_comparison?.competitor_rows || []
+  const competitors: any[] = (currentProjectData?.competitors_data && currentProjectData.competitors_data.length > 0)
+    ? currentProjectData.competitors_data
+    : (competitorRows.length > 0 ? competitorRows : (currentProjectData?.competitor_product ? [currentProjectData.competitor_product] : []))
+  const seoData = currentProjectData?.seo_analysis || {}
+  const mySalesAnalysis = currentProjectData?.my_sales_analysis || currentProjectData?.multi_sales_comparison?.my_sales || null
+  const activityComparisons: any[] = currentProjectData?.multi_sales_comparison?.activity_comparisons || currentProjectData?.sales_comparison?.activity_comparisons || []
+  const salesTimeline = mySalesAnalysis?.sales_activity_timeline || null
+  const targetName = currentProjectMeta?.ownProduct?.name || (myProduct as any).productName || (myProduct as any).websiteTitle || currentProjectMeta?.name || 'Target Product'
+  const targetUrl = currentProjectMeta?.ownProduct?.url || (myProduct as any).url || '#'
+  const commentsAnalysis = currentProjectData?.comments_analysis || null
+  const allComments: any[] = commentsAnalysis?.all_comments || commentsAnalysis?.comments || []
+
+  // ── Helper: convert a PublicComment → unified timeline event ──
+  const commentToEvent = (c: any, isTarget: boolean, pName: string, pUrl: string, idx: number, prefix: string) => {
+    const isReview = c.rating != null
+    return {
+      id: c.id || `${prefix}-${idx}`,
+      type: isReview ? 'review' : 'comment',
+      timestamp: c.collected_at || c.comment_date || '',
+      formattedDate: c.comment_date
+        ? new Date(c.comment_date).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : (c.collected_at ? new Date(c.collected_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unknown date'),
+      relativeTime: '',
+      productName: pName,
+      isTarget,
+      url: pUrl,
+      // review-specific
+      rating: c.rating ?? null,
+      sentiment: c.sentiment || 'neutral',
+      // comment-specific
+      comment_text: c.comment_text || '',
+      author_name: c.author_name || 'Anonymous',
+      topic_label: c.topic_label || '',
+      severity: c.severity || 'low',
+      detected_issue: c.detected_issue || '',
+      feedback_type: c.feedback_type || '',
+      // keep these null so sale-specific renders skip cleanly
+      salesGained: null,
+      newTotalSales: null,
+      price: null,
+      intervalFromPreviousFormatted: null,
+      velocityPerDay: null,
+    }
+  }
+
+  // ── Target unified events (sales + reviews + comments) ──
+  const targetEvents = React.useMemo(() => {
+    const sales = (salesTimeline?.events || []).map((ev: any, idx: number) => ({
+      ...ev,
+      type: 'sale',
+      id: ev.id || `target-ev-${idx}`,
+      productName: targetName,
+      isTarget: true,
+      url: targetUrl,
+    }))
+    const myComments = allComments
+      .filter((c: any) => {
+        const u = (c.product_url || '').toLowerCase()
+        return u === targetUrl.toLowerCase() || (c.product_name || '').toLowerCase() === targetName.toLowerCase()
+      })
+      .map((c: any, idx: number) => commentToEvent(c, true, targetName, targetUrl, idx, 'target-c'))
+    return [...sales, ...myComments].sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salesTimeline, targetName, targetUrl, allComments])
+
+  // ── Competitor unified events ──
+  const competitorEvents = React.useMemo(() => {
+    const compList = competitorRows.length > 0 ? competitorRows : competitors
+    return compList.flatMap((c: any, cIdx: number) => {
+      const compRow = competitorRows.find((r: any) => r.url === c?.url || r.productName === c?.productName) || c
+      const cTimeline = compRow.activity_timeline || compRow.salesAnalysis?.sales_activity_timeline || c.activity_timeline || c.salesAnalysis?.sales_activity_timeline
+      const sales = (cTimeline?.events || []).map((ev: any, idx: number) => ({
+        ...ev,
+        type: 'sale',
+        id: ev.id || `comp-${cIdx}-ev-${idx}`,
+        productName: c.productName || `Competitor ${cIdx + 1}`,
+        isTarget: false,
+        url: c.url,
+      }))
+      const compComments = allComments
+        .filter((cm: any) => {
+          if (cm.is_target === true) return false
+          const u = (cm.product_url || '').toLowerCase()
+          return (c.url && u === (c.url || '').toLowerCase()) || (cm.product_name || '').toLowerCase() === (c.productName || '').toLowerCase()
+        })
+        .map((cm: any, idx: number) => commentToEvent(cm, false, c.productName || `Competitor ${cIdx + 1}`, c.url, idx, `comp-${cIdx}-c`))
+      return [...sales, ...compComments]
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [competitorRows, competitors, allComments])
+
+  // ── All events sorted newest-first ──
+  const allMarketplaceEvents = React.useMemo(() => {
+    return [...targetEvents, ...competitorEvents].sort((a, b) =>
+      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+    )
+  }, [targetEvents, competitorEvents])
+
+  // ── Selected competitor ──
+  const selectedCompetitor = React.useMemo(() => {
+    if (selectedProductKey === 'target' || selectedProductKey === 'all') return null
+    return competitorRows.find(
+      (r: any) => r.url === selectedProductKey || r.productName === selectedProductKey
+    ) || null
+  }, [selectedProductKey, competitorRows])
+
+  // ── Active timeline for the card (sales-only events for the telemetry metrics) ──
+  const activeTimeline = React.useMemo(() => {
+    const saleEventsOnly = allMarketplaceEvents.filter((e: any) => e.type === 'sale')
+    if (selectedProductKey === 'all') {
+      return {
+        has_enough_history: saleEventsOnly.length > 0,
+        total_observed_events: saleEventsOnly.length,
+        events: allMarketplaceEvents, // mixed for display
+        activity_trend_label: saleEventsOnly.length > 0 ? 'Marketplace Verified' : 'Awaiting data',
+        activity_trend: 'stable' as const,
+        activity_trend_reason: `${allMarketplaceEvents.length} total events (sales, reviews, comments) across all monitored products.`,
+        last_observed_activity: saleEventsOnly[0] || null,
+        previous_observed_activity: saleEventsOnly[1] || null,
+        interval_between_last_two: salesTimeline?.interval_between_last_two || null,
+        average_observed_interval: salesTimeline?.average_observed_interval || null,
+      }
+    }
+    if (selectedCompetitor) {
+      return selectedCompetitor.activity_timeline || selectedCompetitor.salesAnalysis?.sales_activity_timeline || null
+    }
+    return salesTimeline
+  }, [selectedProductKey, allMarketplaceEvents, selectedCompetitor, salesTimeline])
+
+  const activeProductName = React.useMemo(() => {
+    if (selectedProductKey === 'all') return 'All Market Competitors & You'
+    if (selectedCompetitor) return selectedCompetitor.productName
+    return targetName
+  }, [selectedProductKey, selectedCompetitor, targetName])
+
+  // ── Active events for the visible timeline list (respects selected product & type filter) ──
+  const activeEvents = React.useMemo(() => {
+    let list = allMarketplaceEvents
+    if (selectedProductKey === 'target') {
+      list = targetEvents
+    } else if (selectedCompetitor) {
+      list = allMarketplaceEvents.filter(
+        (e: any) => e.url === selectedCompetitor.url || e.productName === selectedCompetitor.productName
+      )
+    }
+    if (eventTypeFilter !== 'all') {
+      list = list.filter((e: any) => e.type === eventTypeFilter)
+    }
+    return list
+  }, [selectedProductKey, allMarketplaceEvents, selectedCompetitor, targetEvents, eventTypeFilter])
+
+  const totalSaleEvents = React.useMemo(() => allMarketplaceEvents.filter((e: any) => e.type === 'sale').length, [allMarketplaceEvents])
+  const totalReviewEvents = React.useMemo(() => allMarketplaceEvents.filter((e: any) => e.type === 'review').length, [allMarketplaceEvents])
+  const totalCommentEvents = React.useMemo(() => allMarketplaceEvents.filter((e: any) => e.type === 'comment').length, [allMarketplaceEvents])
+
+  // ── Filtered events for the modal ──
+  const filteredModalEvents = React.useMemo(() => {
+    let list = allMarketplaceEvents
+    // product filter
+    if (eventsModalFilter === 'target') {
+      list = targetEvents
+    } else if (eventsModalFilter !== 'all') {
+      list = allMarketplaceEvents.filter((e: any) => e.url === eventsModalFilter || e.productName === eventsModalFilter)
+    }
+    // type filter
+    if (eventsModalTypeFilter !== 'all') {
+      list = list.filter((e: any) => e.type === eventsModalTypeFilter)
+    }
+    // search
+    if (!eventsModalSearch.trim()) return list
+    const q = eventsModalSearch.toLowerCase()
+    return list.filter((e: any) => {
+      const p = (e.productName || '').toLowerCase()
+      const d = (e.formattedDate || '').toLowerCase()
+      const text = (e.comment_text || '').toLowerCase()
+      const topic = (e.topic_label || '').toLowerCase()
+      const price = String(e.price || '').toLowerCase()
+      const gained = e.salesGained != null ? `+${e.salesGained} unit` : ''
+      return p.includes(q) || d.includes(q) || text.includes(q) || topic.includes(q) || price.includes(q) || gained.includes(q)
+    })
+  }, [allMarketplaceEvents, targetEvents, eventsModalFilter, eventsModalTypeFilter, eventsModalSearch])
 
   if (isLoading || !mounted) {
     return (
@@ -162,29 +375,22 @@ export default function MySaaSPage() {
     )
   }
 
-  const myProduct = currentProjectData?.my_product || {}
-  const competitors: any[] = currentProjectData?.competitors_data || []
-  const seoData = currentProjectData?.seo_analysis || {}
-  const mySalesAnalysis = currentProjectData?.my_sales_analysis || currentProjectData?.multi_sales_comparison?.my_sales || null
-  const competitorRows: any[] = currentProjectData?.multi_sales_comparison?.competitor_rows || []
-  const activityComparisons: any[] = currentProjectData?.multi_sales_comparison?.activity_comparisons || currentProjectData?.sales_comparison?.activity_comparisons || []
-  const salesTimeline = mySalesAnalysis?.sales_activity_timeline || null
-  const targetName = currentProjectMeta?.ownProduct?.name || myProduct.productName || myProduct.websiteTitle || currentProjectMeta?.name || 'Target Product'
-  const targetUrl = currentProjectMeta?.ownProduct?.url || myProduct.url || '#'
-
-  // Active timeline dynamically switches to hovered competitor or reverts to target product
-  const isHoveringCompetitor = Boolean(hoveredCompetitor && !hoveredCompetitor.isTarget)
-  const activeTimeline = isHoveringCompetitor && hoveredCompetitor.timeline
-    ? hoveredCompetitor.timeline
-    : salesTimeline
-  const activeProductName = isHoveringCompetitor
-    ? (hoveredCompetitor.fullName || hoveredCompetitor.name)
-    : targetName
+  const isShowingAllMarket = selectedProductKey === 'all'
+  const isSelectedCompetitor = Boolean(selectedCompetitor)
 
   // Helper to compute sales volume based on timeRange
   const getSalesVolumeByTimeRange = (isTarget: boolean, item: any, compIdx?: number): number => {
     if (timeRange === 'all') {
-      return isTarget ? getProductNumericSales(myProduct) : getProductNumericSales(item)
+      // For target: prefer envatoSales.total_sales → mySalesAnalysis.current_sales
+      // For competitors: prefer envatoSales.total_sales → salesAnalysis.current_sales / compRow.current_sales
+      if (isTarget) return getProductNumericSales(myProduct, mySalesAnalysis)
+      const compRow = competitorRows.find(
+        (r: any) => r.url === item?.url || r.productName === item?.productName
+      ) || (typeof compIdx === 'number' ? competitorRows[compIdx] : null)
+      return getProductNumericSales(
+        item,
+        item?.salesAnalysis || compRow?.salesAnalysis || compRow || currentProjectData?.competitor_sales_analysis
+      )
     }
 
     if (isTarget) {
@@ -257,19 +463,20 @@ export default function MySaaSPage() {
       const compTimeline = compRow?.activity_timeline || compRow?.salesAnalysis?.sales_activity_timeline || c?.salesAnalysis?.sales_activity_timeline || null
 
       return {
-        name: (c.productName || `Competitor ${idx + 1}`).slice(0, 16),
+        name: `${c.productName || `Competitor ${idx + 1}`}`,
         fullName: c.productName || `Competitor ${idx + 1}`,
         isTarget: false,
         price: getProductNumericPrice(c),
         sales: getSalesVolumeByTimeRange(false, c, idx),
         rating: getProductNumericRating(c),
         timeline: compTimeline,
+        _salesAnalysis: c.salesAnalysis || compRow?.salesAnalysis || compRow || null,
       }
     }),
   ]
 
   // 1. Key Takeaway calculation
-  const targetSalesCount = getProductSales(myProduct)
+  const targetSalesCount = getProductSales(myProduct, mySalesAnalysis)
   const targetPriceStr = getProductPrice(myProduct)
   const keyTakeaway = targetSalesCount !== 'Not available'
     ? `Your product has accumulated ${targetSalesCount} verified sales at a list price of ${targetPriceStr}.`
@@ -424,14 +631,14 @@ export default function MySaaSPage() {
           </div>
           <div className="text-xl font-bold text-foreground mt-1 flex items-baseline gap-2">
             {timeRange === 'all' ? (
-              <span>{getProductSales(myProduct)}</span>
+              <span>{getProductSales(myProduct, mySalesAnalysis)}</span>
             ) : (
               <>
                 <span className="text-emerald-400 font-extrabold">
                   {getSalesVolumeByTimeRange(true, myProduct) >= 0 ? `+${getSalesVolumeByTimeRange(true, myProduct)}` : getSalesVolumeByTimeRange(true, myProduct)}
                 </span>
                 <span className="text-xs text-muted-foreground font-normal">
-                  units ({getProductSales(myProduct)} total)
+                  units ({getProductSales(myProduct, mySalesAnalysis)} total)
                 </span>
               </>
             )}
@@ -543,17 +750,7 @@ export default function MySaaSPage() {
               <BarChart
                 data={comparisonChartData}
                 margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
-                onMouseMove={(state: any) => {
-                  if (state && state.activePayload && state.activePayload.length > 0) {
-                    const payload = state.activePayload[0]?.payload
-                    if (payload && !payload.isTarget) {
-                      setHoveredCompetitor(payload)
-                    } else {
-                      setHoveredCompetitor(null)
-                    }
-                  }
-                }}
-                onMouseLeave={() => setHoveredCompetitor(null)}
+
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
                 <XAxis dataKey="name" stroke="#9ca3af" fontSize={11} tickLine={false} />
@@ -592,17 +789,18 @@ export default function MySaaSPage() {
                   }
                 >
                   {comparisonChartData.map((entry, index) => {
-                    const isHovered = hoveredCompetitor?.fullName === entry.fullName || hoveredCompetitor?.name === entry.name
+                    const isSelected = entry.isTarget
+                      ? selectedProductKey === 'target'
+                      : selectedProductKey === (entry.timeline?.source_url || entry.fullName || entry.name)
                     return (
                       <Cell
                         key={`cell-${index}`}
-                        fill={entry.isTarget ? '#6366f1' : isHovered ? '#34d399' : '#10b981'}
-                        opacity={hoveredCompetitor ? (isHovered || entry.isTarget ? 1 : 0.4) : 1}
-                        style={{ cursor: entry.isTarget ? 'default' : 'pointer', transition: 'all 0.2s ease' }}
-                        onMouseEnter={() => {
-                          if (!entry.isTarget) setHoveredCompetitor(entry)
+                        fill={entry.isTarget ? '#6366f1' : isSelected ? '#10b981' : '#059669'}
+                        opacity={isSelected ? 1 : 0.75}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setSelectedProductKey(entry.isTarget ? 'target' : (entry.timeline?.source_url || entry.fullName || entry.name))
                         }}
-                        onMouseLeave={() => setHoveredCompetitor(null)}
                       />
                     )
                   })}
@@ -611,29 +809,32 @@ export default function MySaaSPage() {
             </ResponsiveContainer>
           </div>
           <div className="flex items-center justify-center gap-6 mt-2 text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 cursor-pointer" onClick={() => setSelectedProductKey('target')}>
               <span className="h-3 w-3 rounded bg-indigo-500" />
               <span>Your Product ({targetName})</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="h-3 w-3 rounded bg-emerald-500" />
-              <span>Competitors (Hover bar to inspect sales activity)</span>
+              <span>Competitors (Click any bar to view sales timeline)</span>
             </div>
           </div>
         </CardContent>
       </Card>
 
       {/* 5. SALES ACTIVITY TIMELINE */}
-      <Card className={`border-border bg-card transition-all duration-300 ${isHoveringCompetitor ? 'ring-1 ring-emerald-500/50 shadow-lg shadow-emerald-500/5' : ''}`}>
+      <Card className={`border-border bg-card transition-all duration-300 ${isSelectedCompetitor ? 'ring-1 ring-emerald-500/50 shadow-lg shadow-emerald-500/5' : isShowingAllMarket ? 'ring-1 ring-primary/40 shadow-lg shadow-primary/5' : ''}`}>
         <CardHeader className="pb-3 border-b border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2 flex-wrap">
               <Activity className="h-4 w-4 text-emerald-400" />
               <span>Sales Activity Timeline</span>
-              {isHoveringCompetitor ? (
+              {isShowingAllMarket ? (
+                <Badge className="bg-primary/20 text-primary border-primary/40 text-[10px] flex items-center gap-1.5 font-mono py-0.5 px-2">
+                  <span>All Marketplace Products</span>
+                </Badge>
+              ) : isSelectedCompetitor ? (
                 <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 text-[10px] flex items-center gap-1.5 font-mono py-0.5 px-2 animate-in fade-in">
-                  <Eye className="h-3 w-3 animate-pulse text-emerald-400" />
-                  <span>Previewing Rival: {activeProductName.slice(0, 32)}</span>
+                  <span>Viewing Rival: {activeProductName.slice(0, 32)}</span>
                 </Badge>
               ) : (
                 <Badge variant="outline" className="text-[10px] py-0 px-2 text-indigo-400 border-indigo-500/30">
@@ -642,8 +843,10 @@ export default function MySaaSPage() {
               )}
             </CardTitle>
             <CardDescription className="text-xs text-muted-foreground">
-              {isHoveringCompetitor
-                ? `Showing telemetry for competitor ${activeProductName}. Move cursor away from graph or row to revert.`
+              {isShowingAllMarket
+                ? `Combined verified sales timeline across ${1 + competitorRows.length} monitored marketplace products (${allMarketplaceEvents.length} events).`
+                : isSelectedCompetitor
+                ? `Showing telemetry for competitor ${activeProductName}. Click any row in the comparison table below to change.`
                 : 'Deterministic observation intervals and momentum between verified sales increases.'}
             </CardDescription>
           </div>
@@ -803,195 +1006,313 @@ export default function MySaaSPage() {
             </div>
           </div>
 
-          {/* Compact Chronological Timeline */}
-          <div className="space-y-2 pt-1">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
-                <History className="h-3.5 w-3.5 text-primary" />
-                <span>
-                  Chronological Activity Timeline &mdash; {activeProductName} ({activeTimeline?.events?.length || 0} Observed Increases)
-                </span>
-              </span>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                Observation snapshot checks
-              </span>
+          {/* Marketplace Events & Chronological Timeline */}
+          <div className="space-y-3 pt-3 border-t border-border/60">
+            {/* Header row with controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <History className="h-4 w-4 text-primary" />
+                  <span className="font-semibold text-sm text-foreground">
+                    Marketplace Events & Activity Feed
+                  </span>
+                  <Badge className="bg-primary/10 text-primary border-primary/30 text-[10px] font-mono">
+                    {activeEvents.length} shown of {allMarketplaceEvents.length} total
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Chronological log of verified sales increases, buyer reviews, and public comments.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEventsModalFilter(selectedProductKey === 'all' ? 'all' : (selectedCompetitor?.url || selectedCompetitor?.productName || 'target'))
+                    setEventsModalTypeFilter(eventTypeFilter)
+                    setEventsModalOpen(true)
+                  }}
+                  className="h-7 text-xs gap-1.5 border-border hover:bg-muted/30"
+                >
+                  <Eye className="h-3.5 w-3.5 text-primary" />
+                  <span>Full Event Modal ({allMarketplaceEvents.length})</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setTimelineOpen((o) => !o)}
+                  className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1 px-2"
+                >
+                  <span>{timelineOpen ? 'Collapse' : 'Expand'}</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" className={`h-3.5 w-3.5 transition-transform duration-200 ${timelineOpen ? 'rotate-180' : 'rotate-0'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                </Button>
+              </div>
             </div>
 
-            {activeTimeline?.events && activeTimeline.events.length > 0 ? (
-              <div className="divide-y divide-border/60 border border-border/60 rounded-lg overflow-hidden bg-muted/5">
-                {activeTimeline.events.slice().reverse().map((event: any, idx: number) => (
-                  <div key={event.id || idx} className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-muted/15 transition-colors">
-                    <div className="flex items-start gap-2.5">
-                      <div className="h-6 w-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
-                        <TrendingUp className="h-3.5 w-3.5" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-foreground text-xs">
-                            Observed sales increase: +{event.salesGained} unit{event.salesGained > 1 ? 's' : ''}
-                          </span>
-                          <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-mono bg-background">
-                            {event.newTotalSales} total sales
-                          </Badge>
-                          {event.intervalFromPreviousFormatted && (
-                            <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">
-                              +{event.intervalFromPreviousFormatted}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
-                          <span className="font-mono">{event.formattedDate}</span>
-                          <span>&bull;</span>
-                          <span>{event.relativeTime}</span>
-                          {event.velocityPerDay !== null && event.velocityPerDay > 0 && (
-                            <>
-                              <span>&bull;</span>
-                              <span className="text-emerald-400 font-mono">~{event.velocityPerDay} units/day</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
+            {/* Event Type Filter Pills */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              <span className="text-[10px] uppercase font-bold text-muted-foreground mr-1">Filter:</span>
+              <button
+                type="button"
+                onClick={() => setEventTypeFilter('all')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  eventTypeFilter === 'all'
+                    ? 'border-primary bg-primary/20 text-primary font-bold shadow-xs'
+                    : 'border-border/60 bg-muted/20 text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <span>All Events</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-background/50 font-mono">
+                  {allMarketplaceEvents.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEventTypeFilter('sale')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  eventTypeFilter === 'sale'
+                    ? 'border-emerald-500 bg-emerald-500/20 text-emerald-300 font-bold shadow-xs'
+                    : 'border-border/60 bg-muted/20 text-muted-foreground hover:text-emerald-400'
+                }`}
+              >
+                <TrendingUp className="h-3 w-3" />
+                <span>Sales</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-background/50 font-mono">
+                  {totalSaleEvents}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEventTypeFilter('review')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  eventTypeFilter === 'review'
+                    ? 'border-amber-500 bg-amber-500/20 text-amber-300 font-bold shadow-xs'
+                    : 'border-border/60 bg-muted/20 text-muted-foreground hover:text-amber-400'
+                }`}
+              >
+                <StarIcon className="h-3 w-3" />
+                <span>Reviews</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-background/50 font-mono">
+                  {totalReviewEvents}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEventTypeFilter('comment')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                  eventTypeFilter === 'comment'
+                    ? 'border-sky-500 bg-sky-500/20 text-sky-300 font-bold shadow-xs'
+                    : 'border-border/60 bg-muted/20 text-muted-foreground hover:text-sky-400'
+                }`}
+              >
+                <MessageSquare className="h-3 w-3" />
+                <span>Comments</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-background/50 font-mono">
+                  {totalCommentEvents}
+                </span>
+              </button>
+            </div>
 
-                    <div className="text-[10px] text-muted-foreground font-mono self-end sm:self-auto shrink-0">
-                      {event.price || 'Marketplace price'}
+            {timelineOpen && (
+            <>
+            {/* Product selection tabs */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-border/40 scrollbar-none">
+              <button
+                onClick={() => setSelectedProductKey('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 border ${
+                  selectedProductKey === 'all'
+                    ? 'border-primary bg-primary/15 text-foreground font-bold shadow-xs'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20'
+                }`}
+              >
+                <span>All Market Events</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground font-mono">
+                  {allMarketplaceEvents.length}
+                </span>
+              </button>
+              <button
+                onClick={() => setSelectedProductKey('target')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 border ${
+                  selectedProductKey === 'target'
+                    ? 'border-indigo-500 bg-indigo-500/15 text-indigo-300 font-bold shadow-xs'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20'
+                }`}
+              >
+                <span>{targetName.split('–')[0].split('-')[0].trim()} (You)</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground font-mono">
+                  {salesTimeline?.total_observed_events || 0}
+                </span>
+              </button>
+              {competitorRows.map((c: any, cIdx: number) => {
+                const cTimeline = c.activity_timeline || c.salesAnalysis?.sales_activity_timeline
+                const cIncreases = cTimeline?.total_observed_events ?? 0
+                const isSelected = selectedProductKey === (c.url || c.productName)
+                const shortName = (c.productName || `Competitor ${cIdx + 1}`).split('–')[0].split('-')[0].trim()
+
+                return (
+                  <button
+                    key={c.url || cIdx}
+                    onClick={() => setSelectedProductKey(c.url || c.productName)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 border ${
+                      isSelected
+                        ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300 font-bold shadow-xs'
+                        : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20'
+                    }`}
+                  >
+                    <span>{shortName}</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground font-mono">
+                      {cIncreases}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {activeEvents.length > 0 ? (
+              <div className="divide-y divide-border/60 border border-border/60 rounded-lg overflow-hidden bg-muted/5">
+                {activeEvents.map((event: any, idx: number) => {
+                  const isYou = event.isTarget || event.productName === targetName
+                  const isSale = event.type === 'sale' || event.type == null
+                  const isReview = event.type === 'review'
+                  const isComment = event.type === 'comment'
+
+                  // Icon & color per type
+                  const iconBg = isSale
+                    ? (isYou ? 'bg-indigo-500/20 text-indigo-400' : 'bg-emerald-500/20 text-emerald-400')
+                    : isReview
+                    ? 'bg-amber-500/20 text-amber-400'
+                    : 'bg-sky-500/20 text-sky-400'
+
+                  const EventIcon = isSale ? TrendingUp : isReview ? StarIcon : MessageSquare
+
+                  // Sentiment colour for reviews/comments
+                  const sentimentColor = event.sentiment === 'positive' ? 'text-emerald-400'
+                    : event.sentiment === 'negative' ? 'text-red-400'
+                    : event.sentiment === 'mixed' ? 'text-amber-400'
+                    : 'text-muted-foreground'
+
+                  return (
+                    <div
+                      key={event.id || idx}
+                      onClick={() => {
+                        setEventsModalFilter(isYou ? 'target' : (event.url || event.productName))
+                        setEventsModalTypeFilter(isSale ? 'sale' : isReview ? 'review' : 'comment')
+                        setEventsModalOpen(true)
+                      }}
+                      className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-muted/20 transition-colors cursor-pointer group"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div className={`h-6 w-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${iconBg}`}>
+                          <EventIcon className="h-3.5 w-3.5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {isSale ? (
+                              <span className="font-semibold text-foreground text-xs">
+                                Observed sales increase: +{event.salesGained} unit{event.salesGained > 1 ? 's' : ''}
+                              </span>
+                            ) : isReview ? (
+                              <span className="font-semibold text-foreground text-xs flex items-center gap-1">
+                                <span>New Review</span>
+                                {event.rating != null && (
+                                  <span className="text-amber-400 font-mono">{event.rating}★</span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-foreground text-xs">
+                                {event.topic_label || 'New Comment'}
+                              </span>
+                            )}
+                            {event.productName && (
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] py-0 px-1.5 font-medium ${
+                                  isYou ? 'border-indigo-500/40 text-indigo-400 bg-indigo-500/10' : 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
+                                }`}
+                              >
+                                {event.productName.split('–')[0].split('-')[0].trim()} {isYou ? '(You)' : ''}
+                              </Badge>
+                            )}
+                            <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize ${isSale ? 'bg-background font-mono' : isReview ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-sky-500/10 text-sky-400 border-sky-500/30'}`}>
+                              {isSale ? `${event.newTotalSales} total sales` : isReview ? 'Review' : 'Comment'}
+                            </Badge>
+                            {!isSale && event.sentiment && (
+                              <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize ${sentimentColor} bg-transparent border-current/30`}>
+                                {event.sentiment}
+                              </Badge>
+                            )}
+                            {!isSale && event.severity && event.severity !== 'low' && (
+                              <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize ${
+                                event.severity === 'critical' ? 'text-red-400 border-red-500/30 bg-red-500/10'
+                                : event.severity === 'high' ? 'text-orange-400 border-orange-500/30 bg-orange-500/10'
+                                : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                              }`}>
+                                {event.severity}
+                              </Badge>
+                            )}
+                            {isSale && event.intervalFromPreviousFormatted && (
+                              <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">
+                                +{event.intervalFromPreviousFormatted}
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground flex items-center gap-2 mt-0.5">
+                            <span className="font-mono">{event.formattedDate}</span>
+                            {event.relativeTime && <><span>&bull;</span><span>{event.relativeTime}</span></>}
+                            {isSale && event.velocityPerDay != null && event.velocityPerDay > 0 && (
+                              <><span>&bull;</span><span className="text-emerald-400 font-mono">~{event.velocityPerDay} units/day</span></>
+                            )}
+                            {!isSale && event.author_name && (
+                              <><span>&bull;</span><span className="truncate max-w-[120px]">{event.author_name}</span></>
+                            )}
+                            {!isSale && event.detected_issue && (
+                              <><span>&bull;</span><span className="truncate max-w-[160px] italic opacity-80">{event.detected_issue}</span></>
+                            )}
+                            <span>&bull;</span>
+                            <span className="text-primary group-hover:underline text-[9px]">Click for details &rarr;</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-[10px] text-muted-foreground font-mono self-end sm:self-auto shrink-0">
+                        {isSale ? (event.price || 'Marketplace price') : (event.feedback_type || event.topic_label || '')}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
-              <div className="p-4 rounded-lg bg-muted/15 border border-dashed border-border/80 text-center text-muted-foreground space-y-1">
+              <div className="p-5 rounded-lg bg-muted/15 border border-dashed border-border/80 text-center text-muted-foreground space-y-2">
                 <p className="text-xs font-medium text-foreground">
                   Insufficient sales history for {activeProductName}
                 </p>
-                <p className="text-[11px]">
+                <p className="text-[11px] max-w-md mx-auto">
                   No sales increases observed across recorded snapshots yet. Verified events will populate here as new sales are logged.
                 </p>
+                <div className="pt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSelectedProductKey('all')}
+                    className="text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    <span>View all {allMarketplaceEvents.length} events observed across marketplace competitors &rarr;</span>
+                  </Button>
+                </div>
               </div>
             )}
 
             <p className="text-[10px] text-muted-foreground/80 italic pt-1">
               * Note: Events denote marketplace snapshot observation checks. Exact customer checkout seconds are not fabricated.
             </p>
-          </div>
-
-          {/* Competitor Activity Comparison Card */}
-          <div className="pt-2 border-t border-border/60 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
-                <BarChart3 className="h-3.5 w-3.5 text-primary" />
-                <span>Competitor Sales Activity Comparison</span>
-              </span>
-              <span className="text-[10px] text-muted-foreground">
-                Direct interval & frequency benchmark (Hover to inspect)
-              </span>
-            </div>
-
-            {competitorRows.length > 0 ? (
-              <div className="space-y-2.5">
-                <div className="overflow-x-auto border border-border/60 rounded-lg">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-muted/40 text-muted-foreground text-[10px] uppercase font-bold tracking-wider">
-                      <tr>
-                        <th className="py-2.5 px-3">Product</th>
-                        <th className="py-2.5 px-3 text-center">Observed Increases</th>
-                        <th className="py-2.5 px-3 text-center">Observed Interval</th>
-                        <th className="py-2.5 px-3 text-center">Cadence Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/60 text-xs">
-                      {/* Your product row */}
-                      <tr
-                        className={`font-semibold cursor-pointer transition-colors ${!isHoveringCompetitor ? 'bg-primary/10' : 'hover:bg-muted/10'}`}
-                        onClick={() => setHoveredCompetitor(null)}
-                      >
-                        <td className="py-2.5 px-3 flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full bg-primary" />
-                          <span className="text-foreground">{targetName} (You)</span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono">
-                          {salesTimeline?.total_observed_events || 0} events
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono text-muted-foreground">
-                          {salesTimeline?.average_observed_interval?.formatted || salesTimeline?.interval_between_last_two?.formatted || 'Insufficient history'}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-background text-emerald-400 border-emerald-500/30">
-                            {salesTimeline?.activity_trend_label || 'Stable'}
-                          </Badge>
-                        </td>
-                      </tr>
-
-                      {/* Competitor rows */}
-                      {competitorRows.map((c: any, cIdx: number) => {
-                        const cTimeline = c.activity_timeline || c.salesAnalysis?.sales_activity_timeline
-                        const cIncreases = cTimeline?.total_observed_events ?? 0
-                        const cInterval = cTimeline?.average_observed_interval?.formatted || cTimeline?.interval_between_last_two?.formatted || (c.has_historical_snapshots ? 'Stable / awaiting event' : 'Insufficient history')
-                        const cStatus = cTimeline?.activity_trend_label || c.activity_status || 'Awaiting data'
-                        const isThisHovered = hoveredCompetitor?.fullName === c.productName || hoveredCompetitor?.name === c.productName?.slice(0, 16)
-
-                        return (
-                          <tr
-                            key={c.url || cIdx}
-                            className={`cursor-pointer transition-colors ${isThisHovered ? 'bg-emerald-500/15' : 'hover:bg-muted/10'}`}
-                            onMouseEnter={() => {
-                              setHoveredCompetitor({
-                                name: c.productName?.slice(0, 16) || `Competitor ${cIdx + 1}`,
-                                fullName: c.productName || `Competitor ${cIdx + 1}`,
-                                isTarget: false,
-                                timeline: cTimeline,
-                              })
-                            }}
-                            onMouseLeave={() => setHoveredCompetitor(null)}
-                          >
-                            <td className="py-2.5 px-3 flex items-center gap-2">
-                              <span className={`h-2 w-2 rounded-full ${isThisHovered ? 'bg-emerald-400 ring-2 ring-emerald-400/40' : 'bg-emerald-500'}`} />
-                              <span className="text-foreground font-medium">{c.productName}</span>
-                              {isThisHovered && (
-                                <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 text-[9px] py-0 px-1 ml-1 font-mono">
-                                  inspecting
-                                </Badge>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-center font-mono">
-                              {cIncreases} event{cIncreases === 1 ? '' : 's'}
-                            </td>
-                            <td className="py-2.5 px-3 text-center font-mono text-muted-foreground">
-                              {cInterval}
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              <Badge variant="secondary" className="text-[10px] py-0 px-1.5">
-                                {cStatus}
-                              </Badge>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Evidence Insight from Activity Comparison */}
-                {activityComparisons.length > 0 && activityComparisons[0]?.comparison_insight && (
-                  <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-2.5 text-xs text-foreground">
-                    <Sparkles className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-semibold text-xs block text-emerald-400">
-                        Competitive Sales Activity Observation
-                      </span>
-                      <p className="text-[11px] leading-relaxed mt-0.5">
-                        {activityComparisons[0].comparison_insight}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="p-3 rounded-lg bg-muted/15 border border-border/60 text-xs text-muted-foreground">
-                Add competitor products to benchmark observed sales intervals and transaction frequency.
-              </div>
+            </>
             )}
           </div>
+
+
         </CardContent>
       </Card>
 
@@ -1081,133 +1402,6 @@ export default function MySaaSPage() {
       </Card>
 
 
-      {/* Positioning & Value Proposition */}
-      <Card className="border-border bg-card">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-            <FileText className="h-4 w-4 text-primary" />
-            <span>Product Positioning & Value Proposition</span>
-          </CardTitle>
-          <CardDescription className="text-xs text-muted-foreground">
-            Scraped headline claims, target audience, and primary narrative communicating product value.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 text-xs">
-          <div className="p-3.5 rounded-lg bg-muted/15 border border-border/80 space-y-2">
-            <span className="font-semibold text-[11px] text-foreground block uppercase tracking-wider">
-              Primary Headline & Description
-            </span>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              {myProduct?.description || myProduct?.websiteTitle || 'Description not extracted from landing page.'}
-            </p>
-          </div>
-
-          {myProduct?.positioningClaims && myProduct.positioningClaims.length > 0 && (
-            <div className="space-y-2">
-              <span className="font-semibold text-foreground text-xs block">Key Marketing Claims:</span>
-              <div className="flex flex-wrap gap-2">
-                {myProduct.positioningClaims.map((claim: string, idx: number) => (
-                  <Badge key={idx} variant="outline" className="text-xs py-1 px-2.5 bg-background">
-                    "{claim}"
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {myProduct?.targetCustomers && myProduct.targetCustomers.length > 0 && (
-            <div className="space-y-1.5 pt-1">
-              <span className="font-semibold text-foreground text-xs block">Target Buyer Profiles:</span>
-              <div className="flex flex-wrap gap-1.5">
-                {myProduct.targetCustomers.map((cust: string, idx: number) => (
-                  <Badge key={idx} variant="secondary" className="text-[11px]">
-                    {cust}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-
-      {/* Pricing Plans Breakdown (if multiple plans exist) */}
-      {myProduct?.pricingPlans && myProduct.pricingPlans.length > 0 && (
-        <Card className="border-border bg-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-emerald-400" />
-              <span>Public Pricing Plans ({myProduct.pricingPlans.length})</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {myProduct.pricingPlans.map((plan: any, idx: number) => (
-                <div key={idx} className="p-3.5 rounded-lg border border-border bg-muted/10 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-foreground text-sm">{plan.name || `Plan ${idx + 1}`}</span>
-                    {plan.isPopular && <Badge className="text-[10px]">Popular</Badge>}
-                  </div>
-                  <div className="text-lg font-bold text-foreground">
-                    {plan.priceMonthly || plan.priceAnnual || (plan.price ? `$${plan.price}` : 'Unlisted')}
-                  </div>
-                  {plan.features && plan.features.length > 0 && (
-                    <ul className="space-y-1 text-[11px] text-muted-foreground pt-1 border-t border-border/60">
-                      {plan.features.slice(0, 4).map((f: string, fIdx: number) => (
-                        <li key={fIdx} className="truncate">• {f}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Technical On-Page SEO Telemetry */}
-      {seoData?.target_onpage_audit && (
-        <Card className="border-border bg-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Search className="h-4 w-4 text-primary" />
-              <span>On-Page Technical SEO Telemetry</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-xs">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-              <div className="p-2 rounded bg-muted/20 border border-border">
-                <span className="text-[10px] text-muted-foreground block">Image Alt Tags</span>
-                <span className="font-bold text-foreground text-xs">
-                  {seoData.target_onpage_audit.image_alts_count}
-                  {seoData.target_onpage_audit.total_images_count !== undefined && (
-                    <span className="text-muted-foreground font-normal text-[10px]"> / {seoData.target_onpage_audit.total_images_count}</span>
-                  )}
-                </span>
-              </div>
-              <div className="p-2 rounded bg-muted/20 border border-border">
-                <span className="text-[10px] text-muted-foreground block">Canonical URL</span>
-                <span className={`font-bold text-xs ${seoData.target_onpage_audit.canonical_status === 'valid' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {seoData.target_onpage_audit.canonical_status}
-                </span>
-              </div>
-              <div className="p-2 rounded bg-muted/20 border border-border">
-                <span className="text-[10px] text-muted-foreground block">Structured Data</span>
-                <span className={`font-bold text-xs ${seoData.target_onpage_audit.has_structured_data ? 'text-emerald-400' : 'text-muted-foreground'}`}>
-                  {seoData.target_onpage_audit.has_structured_data ? 'Detected' : 'None'}
-                </span>
-              </div>
-              <div className="p-2 rounded bg-muted/20 border border-border">
-                <span className="text-[10px] text-muted-foreground block">H1 Hierarchy</span>
-                <span className={`font-bold text-xs ${seoData.target_onpage_audit.h1_status === 'optimal' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {seoData.target_onpage_audit.h1_count} ({seoData.target_onpage_audit.h1_status})
-                </span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Data Provenance Footer */}
       <div className="flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/60 pt-3">
         <span className="flex items-center gap-1.5">
@@ -1216,6 +1410,208 @@ export default function MySaaSPage() {
         </span>
         <span>Last Analyzed: {currentProjectMeta?.updatedAt ? new Date(currentProjectMeta.updatedAt).toLocaleDateString() : 'Recent'}</span>
       </div>
+      {/* Events Modal — shows ALL events when clicking event triggers */}
+      {eventsModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          onClick={() => setEventsModalOpen(false)}
+        >
+          <div
+            className="relative bg-card border border-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border/70">
+              <div className="space-y-0.5">
+                <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
+                  <History className="h-4 w-4 text-primary" />
+                  All Events Listed
+                </h2>
+                <p className="text-[11px] text-muted-foreground">
+                  {filteredModalEvents.length} event{filteredModalEvents.length !== 1 ? 's' : ''} · Click any row to view source
+                </p>
+              </div>
+              <button
+                onClick={() => setEventsModalOpen(false)}
+                className="rounded-full p-1.5 hover:bg-muted/40 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            {/* Filter + Search Bar */}
+            <div className="px-5 py-3 border-b border-border/50 space-y-2">
+              {/* Product filter pills */}
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-0.5">
+                {[
+                  { key: 'all', label: `All Products (${allMarketplaceEvents.length})` },
+                  { key: 'target', label: `${targetName.split('–')[0].trim()} · You (${targetEvents.length})` },
+                  ...competitorRows.map((c: any) => ({
+                    key: c.url || c.productName,
+                    label: `${(c.productName || 'Competitor').split('–')[0].trim()} (${
+                      allMarketplaceEvents.filter((e: any) => e.url === c.url || e.productName === c.productName).length
+                    })`,
+                  }))
+                ].map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setEventsModalFilter(f.key)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium shrink-0 border transition-colors ${
+                      eventsModalFilter === f.key
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/20'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              {/* Event type filter pills */}
+              <div className="flex items-center gap-1.5">
+                {(['all', 'sale', 'review', 'comment'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setEventsModalTypeFilter(t)}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 border transition-colors ${
+                      eventsModalTypeFilter === t
+                        ? t === 'sale' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : t === 'review' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          : t === 'comment' ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                          : 'bg-muted text-foreground border-border'
+                        : 'border-border/50 text-muted-foreground hover:bg-muted/20'
+                    }`}
+                  >
+                    {t === 'all' ? 'All Types' : t === 'sale' ? '📈 Sales' : t === 'review' ? '⭐ Reviews' : '💬 Comments'}
+                  </button>
+                ))}
+              </div>
+              {/* Search */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search by date, product, topic, text..."
+                  value={eventsModalSearch}
+                  onChange={(e) => setEventsModalSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-muted/30 border border-border/60 rounded-lg outline-none focus:border-primary/50 focus:bg-muted/50 transition-colors placeholder:text-muted-foreground/60"
+                />
+              </div>
+            </div>
+
+            {/* Events List */}
+            <div className="flex-1 overflow-y-auto divide-y divide-border/50">
+              {filteredModalEvents.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground">
+                  <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-xs font-medium">No events found</p>
+                  <p className="text-[11px] mt-1 opacity-70">Try changing the filter or search term.</p>
+                </div>
+              ) : (
+                filteredModalEvents.map((event: any, idx: number) => {
+                  const isYou = event.isTarget || event.productName === targetName
+                  const isSale = event.type === 'sale' || event.type == null
+                  const isReview = event.type === 'review'
+                  const iconBg = isSale
+                    ? (isYou ? 'bg-indigo-500/20 text-indigo-400' : 'bg-emerald-500/20 text-emerald-400')
+                    : isReview ? 'bg-amber-500/20 text-amber-400' : 'bg-sky-500/20 text-sky-400'
+                  const EventIcon = isSale ? TrendingUp : isReview ? StarIcon : MessageSquare
+                  const sentimentColor = event.sentiment === 'positive' ? 'text-emerald-400'
+                    : event.sentiment === 'negative' ? 'text-red-400'
+                    : event.sentiment === 'mixed' ? 'text-amber-400'
+                    : 'text-muted-foreground'
+                  return (
+                    <div
+                      key={event.id || idx}
+                      className="px-5 py-3 flex flex-col sm:flex-row sm:items-start justify-between gap-2 hover:bg-muted/15 transition-colors"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div className={`h-6 w-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${iconBg}`}>
+                          <EventIcon className="h-3.5 w-3.5" />
+                        </div>
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {isSale ? (
+                              <span className="font-semibold text-foreground text-xs">
+                                +{event.salesGained} unit{event.salesGained > 1 ? 's' : ''} sale increase
+                              </span>
+                            ) : isReview ? (
+                              <span className="font-semibold text-foreground text-xs flex items-center gap-1">
+                                New Review {event.rating != null && <span className="text-amber-400 font-mono">{event.rating}★</span>}
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-foreground text-xs">{event.topic_label || 'New Comment'}</span>
+                            )}
+                            <Badge variant="outline" className={`text-[10px] py-0 px-1.5 ${
+                              isYou ? 'border-indigo-500/40 text-indigo-400 bg-indigo-500/10' : 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
+                            }`}>
+                              {(event.productName || '').split('–')[0].split('-')[0].trim()}{isYou ? ' (You)' : ''}
+                            </Badge>
+                            {isSale ? (
+                              <>
+                                <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-mono bg-background">{event.newTotalSales} total</Badge>
+                                {event.intervalFromPreviousFormatted && (
+                                  <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">+{event.intervalFromPreviousFormatted} since prev</Badge>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize ${sentimentColor} border-current/30 bg-transparent`}>{event.sentiment}</Badge>
+                                {event.severity && event.severity !== 'low' && (
+                                  <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize ${
+                                    event.severity === 'critical' ? 'text-red-400 border-red-500/30 bg-red-500/10'
+                                    : event.severity === 'high' ? 'text-orange-400 border-orange-500/30 bg-orange-500/10'
+                                    : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                                  }`}>{event.severity}</Badge>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          {!isSale && event.comment_text && (
+                            <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 italic max-w-sm">
+                              &ldquo;{event.comment_text}&rdquo;
+                            </p>
+                          )}
+                          {!isSale && event.detected_issue && (
+                            <p className="text-[10px] text-muted-foreground/70 truncate max-w-sm">Issue: {event.detected_issue}</p>
+                          )}
+                          <div className="text-[10px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
+                            <Calendar className="h-3 w-3 shrink-0" />
+                            <span className="font-mono">{event.formattedDate}</span>
+                            {event.relativeTime && <><span>·</span><span>{event.relativeTime}</span></>}
+                            {isSale && event.velocityPerDay != null && event.velocityPerDay > 0 && (
+                              <><span>·</span><span className="text-emerald-400 font-mono">~{event.velocityPerDay} units/day</span></>
+                            )}
+                            {!isSale && event.author_name && <><span>·</span><span className="font-medium">{event.author_name}</span></>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground font-mono self-end sm:self-start shrink-0 mt-0.5">
+                        {isSale ? (event.price || 'Marketplace') : (event.feedback_type || event.topic_label || '')}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 border-t border-border/60 flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground">
+                Showing {filteredModalEvents.length} of {allMarketplaceEvents.length} total events
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setEventsModalOpen(false)}
+                className="h-7 text-xs"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

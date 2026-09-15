@@ -14,6 +14,7 @@ import {
   clusterCommentsSemanticallySync,
   SemanticCluster,
 } from './semantic-clustering'
+import { classifyPublicDiscussion } from './comment-classifier'
 
 export interface RawCommentItem {
   author_name: string
@@ -507,10 +508,8 @@ export async function analyzeCompetitorComments(
       if (seenTexts.has(sig)) continue
       seenTexts.add(sig)
 
-      const { sentiment, matchedPattern, isCritical, confidenceScore } = classifySentimentAndComplaint(
-        c.comment_text,
-        c.rating
-      )
+      const classified = classifyPublicDiscussion(c.comment_text, c.author_name, c.rating)
+      const isCritical = classified.isActionableComplaint && (c.rating !== null && c.rating <= 2)
 
       const pubComment: PublicComment = {
         id: `comm_${comp.url.slice(-6)}_${i}_${Math.random().toString(36).slice(2, 6)}`,
@@ -521,28 +520,27 @@ export async function analyzeCompetitorComments(
         comment_url: c.comment_url,
         comment_date: c.comment_date || 'Recent public review',
         rating: c.rating,
-        sentiment,
-        topic: matchedPattern?.topicKey || 'general_question',
-        topic_label: matchedPattern?.category || (sentiment === 'positive' ? 'Positive Review' : 'General Feedback'),
-        severity: matchedPattern?.defaultSeverity || 'low',
-        detected_issue: matchedPattern?.detectedIssue || (sentiment === 'positive' ? 'Positive customer experience' : 'General feedback'),
-        relevant_feature: matchedPattern?.relevantFeature || '',
-        suggested_angle: matchedPattern?.suggestedAngle || '',
-        confidence: isCritical || confidenceScore >= 0.9 ? 'high' : 'medium',
-        confidence_score: confidenceScore,
-        feedback_type: sentiment === 'positive' ? 'suggestion' : 'complaint',
-        is_suggestive: sentiment === 'mixed',
+        sentiment: classified.sentiment,
+        topic: classified.topic as any,
+        topic_label: classified.topicLabel,
+        severity: isCritical ? 'critical' : classified.isActionableComplaint ? 'high' : 'low',
+        detected_issue: classified.detectedIssue || 'General feedback',
+        relevant_feature: classified.relevantFeature || '',
+        suggested_angle: '',
+        confidence: isCritical ? 'high' : 'medium',
+        confidence_score: 0.85,
+        feedback_type: classified.category === 'author_reply' ? ('author_reply' as any) : classified.category === 'inquiry' ? ('inquiry' as any) : classified.category === 'suggestion' ? ('suggestion' as any) : classified.category === 'positive' ? ('praise' as any) : 'complaint',
+        is_suggestive: classified.category === 'suggestion',
         collected_at: new Date().toISOString(),
       }
 
       allProcessedComments.push(pubComment)
 
-      if (sentiment === 'negative' || sentiment === 'mixed') {
-        classifiedComplaints.push({ comment: pubComment, isCritical, confidenceScore })
+      if (classified.isActionableComplaint) {
+        classifiedComplaints.push({ comment: pubComment, isCritical, confidenceScore: 0.88 })
         allFilteredComments.push(pubComment)
-        if (sentiment === 'mixed') mixedCount++
-        else negativeCount++
-      } else if (sentiment === 'positive') {
+        negativeCount++
+      } else if (classified.category === 'positive') {
         positiveCount++
       } else {
         neutralCount++
