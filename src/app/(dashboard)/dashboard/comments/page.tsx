@@ -202,6 +202,13 @@ export default function CommentsPage() {
     return list
   }, [allComments, ownProductName, competitorsData, currentProjectData, currentProjectMeta])
 
+  // Selected Tab Resolution
+  const selectedTabObj = useMemo(() => {
+    return productTabs.find((t) => t.id === selectedProductTab)
+  }, [productTabs, selectedProductTab])
+
+  const selectedTabLabel = selectedTabObj?.label || (selectedProductTab === 'all' ? 'All Market Feedback' : selectedProductTab)
+
   // Scoped comments by selected tab
   const activeComments = useMemo(() => {
     if (selectedProductTab === 'all') return allComments
@@ -216,8 +223,19 @@ export default function CommentsPage() {
     if (selectedProductTab === 'own') {
       return allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
     }
-    return allComments.filter((c) => c.product_name === selectedProductTab)
-  }, [allComments, selectedProductTab, ownProductName, currentProjectData, currentProjectMeta])
+    const tabUrl = selectedTabObj?.url
+    const tabShort = (selectedTabObj?.label || selectedProductTab).split('–')[0].split('-')[0].trim().toLowerCase()
+
+    return allComments.filter((c) => {
+      if (c.product_name === selectedProductTab) return true
+      if (tabUrl && c.product_url && c.product_url === tabUrl) return true
+      if (c.product_name) {
+        const cShort = c.product_name.split('–')[0].split('-')[0].trim().toLowerCase()
+        if (cShort === tabShort) return true
+      }
+      return false
+    })
+  }, [allComments, selectedProductTab, selectedTabObj, ownProductName, currentProjectData, currentProjectMeta])
 
   // Scoped clusters by selected tab
   const activeClusters = useMemo(() => {
@@ -233,12 +251,12 @@ export default function CommentsPage() {
     if (selectedProductTab === 'own') {
       return clusters.filter((cl) => isOwnProduct(cl.targetProduct || cl.competitor_name, cl.competitor_url || cl.sourceUrl))
     }
-    const tabShort = selectedProductTab.split('–')[0].split('-')[0].trim().toLowerCase()
+    const tabShort = (selectedTabObj?.label || selectedProductTab).split('–')[0].split('-')[0].trim().toLowerCase()
     return clusters.filter((cl) => {
-      const target = (cl.targetProduct || '').toLowerCase()
+      const target = (cl.targetProduct || cl.competitor_name || '').toLowerCase()
       return target.includes(tabShort) || tabShort.includes(target)
     })
-  }, [clusters, selectedProductTab, ownProductName, currentProjectData, currentProjectMeta])
+  }, [clusters, selectedProductTab, selectedTabObj, ownProductName, currentProjectData, currentProjectMeta])
 
   // Scoped Key Numbers
   const hasCommentsData = activeComments.length > 0 || (selectedProductTab === 'all' && commentsAnalysis.total_analyzed !== undefined)
@@ -318,12 +336,12 @@ export default function CommentsPage() {
 
   const topCluster = activeClusters.length > 0 ? activeClusters[0] : null
 
-  // Mined Feature Requests (Hook called unconditionally)
+  // Mined Feature Requests (Scoped to active tab)
   const featureRequests = useMemo(() => {
     const list: any[] = []
     const seen = new Set<string>()
 
-    for (const c of allComments) {
+    for (const c of activeComments) {
       if (c.relevant_feature || c.feedback_type === 'suggestion' || c.feedback_type === 'feature_request' || c.is_suggestive) {
         const title = c.relevant_feature || c.topic_label || c.detected_issue || 'Enhanced capability requested'
         if (!seen.has(title)) {
@@ -333,7 +351,7 @@ export default function CommentsPage() {
             feature: title,
             comment: c.comment_text || c.text || '',
             author: c.author_name || 'Customer',
-            product: c.product_name || 'Market standard',
+            product: c.product_name || selectedTabLabel || 'Market standard',
             topic: c.topic_label || c.topic || 'Feature Request',
             priority: c.severity === 'high' ? 'High' : 'Medium',
           })
@@ -341,7 +359,7 @@ export default function CommentsPage() {
       }
     }
     return list
-  }, [allComments])
+  }, [activeComments, selectedTabLabel])
 
   // Extract unique products and topics (Hooks called unconditionally)
   const uniqueProducts = useMemo(() => {
@@ -354,16 +372,16 @@ export default function CommentsPage() {
 
   const uniqueTopics = useMemo(() => {
     const set = new Set<string>()
-    allComments.forEach((c) => {
+    activeComments.forEach((c) => {
       const t = c.topic_label || c.topic
       if (t) set.add(t)
     })
     return Array.from(set)
-  }, [allComments])
+  }, [activeComments])
 
-  // Filtered comments for explorer (Hook called unconditionally)
+  // Filtered comments for explorer (Scoped strictly to active tab)
   const filteredComments = useMemo(() => {
-    return allComments.filter((c) => {
+    return activeComments.filter((c) => {
       const text = (c.comment_text || c.text || '').toLowerCase()
       const author = (c.author_name || '').toLowerCase()
       const matchesSearch = !commentSearch || text.includes(commentSearch.toLowerCase()) || author.includes(commentSearch.toLowerCase())
@@ -399,12 +417,15 @@ export default function CommentsPage() {
           ? isAuthor
           : c.sentiment === 'neutral'
 
-      const matchesProduct = productFilter === 'all' || c.product_name === productFilter
+      const matchesProduct =
+        selectedProductTab !== 'all' || productFilter === 'all'
+          ? true
+          : c.product_name === productFilter
       const matchesTopic = topicFilter === 'all' || (c.topic_label || c.topic) === topicFilter
 
       return matchesSearch && matchesSentiment && matchesProduct && matchesTopic
     })
-  }, [allComments, commentSearch, sentimentFilter, productFilter, topicFilter])
+  }, [activeComments, selectedProductTab, commentSearch, sentimentFilter, productFilter, topicFilter])
 
   // Section 14 Consistency Engine: Natural summary strictly aligned with real counts and selected product
   const mainInsightHeadline = useMemo(() => {
@@ -682,7 +703,11 @@ export default function CommentsPage() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setSelectedProductTab(tab.id)}
+                onClick={() => {
+                  setSelectedProductTab(tab.id)
+                  setSelectedClusterIndex(0)
+                  setCommentSearch('')
+                }}
                 className={`px-3 py-1.5 text-xs font-medium rounded-t-lg transition-all flex items-center gap-1.5 border-b-2 shrink-0 ${
                   isSelected
                     ? 'border-primary text-foreground font-semibold bg-muted/30'
@@ -707,6 +732,7 @@ export default function CommentsPage() {
         <Card
           onClick={() => {
             setSentimentFilter('all')
+            setCommentSearch('')
             setActiveModal('comments')
           }}
           className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-primary/60 hover:bg-muted/20 transition-all group"
@@ -718,13 +744,16 @@ export default function CommentsPage() {
           <div className="text-2xl font-bold text-foreground">
             {totalComments !== undefined ? totalComments : 'Not available'}
           </div>
-          <div className="text-[10px] text-muted-foreground">Total posts collected</div>
+          <div className="text-[10px] text-muted-foreground">
+            {selectedProductTab === 'all' ? 'Total posts collected' : `${selectedTabLabel} posts`}
+          </div>
         </Card>
 
         {/* Buyer Inquiries */}
         <Card
           onClick={() => {
             setSentimentFilter('inquiry')
+            setCommentSearch('')
             setActiveModal('comments')
           }}
           className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-blue-500/60 hover:bg-muted/20 transition-all group"
@@ -750,7 +779,7 @@ export default function CommentsPage() {
             </div>
           </MetricExplainer>
           <div className="text-[10px] text-muted-foreground">
-            {inquiryPercent}% of all discussions
+            {inquiryPercent}% of {selectedProductTab === 'all' ? 'all discussions' : selectedTabLabel}
           </div>
         </Card>
 
@@ -758,6 +787,7 @@ export default function CommentsPage() {
         <Card
           onClick={() => {
             setSentimentFilter('negative')
+            setCommentSearch('')
             setActiveModal('comments')
           }}
           className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-rose-500/60 hover:bg-muted/20 transition-all group"
@@ -790,6 +820,7 @@ export default function CommentsPage() {
         {/* Recurring problems */}
         <Card
           onClick={() => {
+            setSelectedClusterIndex(0)
             setActiveModal('problems')
           }}
           className="border-border bg-card p-3.5 space-y-1 shadow-sm cursor-pointer hover:border-purple-500/60 hover:bg-muted/20 transition-all group"
@@ -799,7 +830,7 @@ export default function CommentsPage() {
             <span className="text-[9px] text-muted-foreground/70 group-hover:text-purple-400">Clusters →</span>
           </div>
           <div className="text-2xl font-bold text-purple-400">
-            {clusters !== undefined ? recurringProblemsCount : 'Not available'}
+            {activeClusters !== undefined ? recurringProblemsCount : 'Not available'}
           </div>
           <div className="text-[10px] text-muted-foreground">Semantic problem clusters</div>
         </Card>
@@ -1063,37 +1094,64 @@ export default function CommentsPage() {
                   <AlertTriangle className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-foreground">Customer Problems & Recurring Friction</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-foreground">Customer Problems & Recurring Friction</h2>
+                    <Badge variant="outline" className="text-[10px] text-primary border-primary/30 bg-primary/10">
+                      {selectedTabLabel}
+                    </Badge>
+                  </div>
                   <p className="text-xs text-muted-foreground">
-                    Detailed semantic problem clusters mined across discussion feeds ({clusters.length} tracked)
+                    {selectedProductTab === 'all'
+                      ? `Detailed semantic problem clusters mined across all discussion feeds (${activeClusters.length} tracked)`
+                      : `Recurring problem clusters detected for ${selectedTabLabel} (${activeClusters.length} tracked)`}
                   </p>
                 </div>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setActiveModal(null)}
-                className="h-8 w-8 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center gap-2">
+                {productTabs.length > 1 && (
+                  <select
+                    value={selectedProductTab}
+                    onChange={(e) => {
+                      setSelectedProductTab(e.target.value)
+                      setSelectedClusterIndex(0)
+                    }}
+                    className="h-8 text-xs rounded-md border border-border bg-card px-2.5 text-foreground"
+                  >
+                    {productTabs.map((tab) => (
+                      <option key={tab.id} value={tab.id}>
+                        {tab.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setActiveModal(null)}
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
 
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-              {clusters.length === 0 ? (
+              {activeClusters.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground text-xs space-y-2">
                   <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto" />
-                  <p className="font-semibold text-foreground text-sm">No Recurring Problems Detected</p>
+                  <p className="font-semibold text-foreground text-sm">
+                    No Recurring Problems Detected for {selectedTabLabel}
+                  </p>
                   <p className="max-w-md mx-auto">
-                    {totalComments} discussions were analyzed, but complaints did not cross the recurrence threshold to form a cluster.
+                    {totalComments} discussions were analyzed for {selectedTabLabel}, but complaints did not cross the recurrence threshold to form a cluster.
                   </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
                   {/* Left Column: Problem List */}
                   <div className="md:col-span-5 space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-                    {clusters.map((cluster, idx) => (
+                    {activeClusters.map((cluster, idx) => (
                       <div
                         key={cluster.id || idx}
                         onClick={() => setSelectedClusterIndex(idx)}
@@ -1132,64 +1190,69 @@ export default function CommentsPage() {
 
                   {/* Right Column: Problem Deep Dive */}
                   <div className="md:col-span-7 border border-border rounded-lg p-4 sm:p-5 bg-muted/10 space-y-4">
-                    {clusters[selectedClusterIndex] && (
-                      <>
-                        <div className="border-b border-border pb-3 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="text-[10px] text-rose-400 border-rose-500/30 bg-rose-500/10">
-                              Priority: {clusters[selectedClusterIndex].priorityLabel}
-                            </Badge>
-                            <Badge variant="secondary" className="text-[10px]">
-                              {clusters[selectedClusterIndex].mentions} mentions (
-                              {totalComments && totalComments > 0
-                                ? `${Math.round((clusters[selectedClusterIndex].mentions / totalComments) * 100)}%`
-                                : '0%'}
-                              )
-                            </Badge>
-                          </div>
-                          <h3 className="text-sm font-bold text-foreground">
-                            {clusters[selectedClusterIndex].title}
-                          </h3>
-                        </div>
-
-                        {/* Root Problem */}
-                        <div className="space-y-1">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                            Root Problem
-                          </span>
-                          <p className="text-xs text-foreground bg-card p-2.5 rounded border border-border">
-                            {clusters[selectedClusterIndex].rootProblem}
-                          </p>
-                        </div>
-
-                        {/* Category & Target */}
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="p-2.5 bg-card rounded border border-border space-y-0.5">
-                            <span className="text-[10px] text-muted-foreground uppercase font-semibold">Category</span>
-                            <div className="text-foreground font-medium">{clusters[selectedClusterIndex].category}</div>
-                          </div>
-                          <div className="p-2.5 bg-card rounded border border-border space-y-0.5">
-                            <span className="text-[10px] text-muted-foreground uppercase font-semibold">Target Product</span>
-                            <div className="text-foreground font-medium truncate">
-                              {clusters[selectedClusterIndex].targetProduct}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Supporting Customer Evidence */}
-                        <div className="space-y-1.5">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                            Customer Evidence & Verbatim Quotes
-                          </span>
-                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                            {clusters[selectedClusterIndex].supportingQuotes.map((quote: string, qIdx: number) => (
-                              <div key={qIdx} className="text-xs italic text-muted-foreground bg-card p-2.5 rounded border border-border/80 leading-relaxed">
-                                “{quote.trim()}”
+                    {(activeClusters[selectedClusterIndex] || activeClusters[0]) && (
+                      (() => {
+                        const cur = activeClusters[selectedClusterIndex] || activeClusters[0]
+                        return (
+                          <>
+                            <div className="border-b border-border pb-3 space-y-1">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-[10px] text-rose-400 border-rose-500/30 bg-rose-500/10">
+                                  Priority: {cur.priorityLabel}
+                                </Badge>
+                                <Badge variant="secondary" className="text-[10px]">
+                                  {cur.mentions} mentions (
+                                  {totalComments && totalComments > 0
+                                    ? `${Math.round((cur.mentions / totalComments) * 100)}%`
+                                    : '0%'}
+                                  )
+                                </Badge>
                               </div>
-                            ))}
-                          </div>
-                        </div>
-                      </>
+                              <h3 className="text-sm font-bold text-foreground">
+                                {cur.title}
+                              </h3>
+                            </div>
+
+                            {/* Root Problem */}
+                            <div className="space-y-1">
+                              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                                Root Problem
+                              </span>
+                              <p className="text-xs text-foreground bg-card p-2.5 rounded border border-border">
+                                {cur.rootProblem}
+                              </p>
+                            </div>
+
+                            {/* Category & Target */}
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="p-2.5 bg-card rounded border border-border space-y-0.5">
+                                <span className="text-[10px] text-muted-foreground uppercase font-semibold">Category</span>
+                                <div className="text-foreground font-medium">{cur.category}</div>
+                              </div>
+                              <div className="p-2.5 bg-card rounded border border-border space-y-0.5">
+                                <span className="text-[10px] text-muted-foreground uppercase font-semibold">Target Product</span>
+                                <div className="text-foreground font-medium truncate">
+                                  {cur.targetProduct || selectedTabLabel}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Supporting Customer Evidence */}
+                            <div className="space-y-1.5">
+                              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                                Customer Evidence & Verbatim Quotes
+                              </span>
+                              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                {cur.supportingQuotes?.map((quote: string, qIdx: number) => (
+                                  <div key={qIdx} className="text-xs italic text-muted-foreground bg-card p-2.5 rounded border border-border/80 leading-relaxed">
+                                    “{quote.trim()}”
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </>
+                        )
+                      })()
                     )}
                   </div>
                 </div>
@@ -1369,9 +1432,16 @@ export default function CommentsPage() {
                   <MessageSquare className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-foreground">Customer Comment Explorer</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-foreground">Customer Comment Explorer</h2>
+                    <Badge variant="outline" className="text-[10px] text-primary border-primary/30 bg-primary/10">
+                      {selectedTabLabel}
+                    </Badge>
+                  </div>
                   <p className="text-xs text-muted-foreground">
-                    Search and filter individual customer feedback posts ({filteredComments.length} shown of {allComments.length})
+                    {selectedProductTab === 'all'
+                      ? `Search and filter individual customer feedback posts (${filteredComments.length} shown of ${allComments.length})`
+                      : `Showing ${filteredComments.length} of ${activeComments.length} posts for ${selectedTabLabel}`}
                   </p>
                 </div>
               </div>
@@ -1398,13 +1468,32 @@ export default function CommentsPage() {
                   />
                 </div>
 
+                {/* Product selector to easily toggle or view competitor in modal */}
+                {productTabs.length > 1 && (
+                  <select
+                    value={selectedProductTab}
+                    onChange={(e) => {
+                      setSelectedProductTab(e.target.value)
+                      setSelectedClusterIndex(0)
+                      setCommentSearch('')
+                    }}
+                    className="h-8 text-xs rounded-md border border-border bg-card px-2.5 text-foreground max-w-[200px]"
+                  >
+                    {productTabs.map((tab) => (
+                      <option key={tab.id} value={tab.id}>
+                        {tab.label} ({tab.count})
+                      </option>
+                    ))}
+                  </select>
+                )}
+
                 {/* Category / Sentiment selector */}
                 <select
                   value={sentimentFilter}
                   onChange={(e) => setSentimentFilter(e.target.value as any)}
                   className="h-8 text-xs rounded-md border border-border bg-card px-2.5 text-foreground"
                 >
-                  <option value="all">All Feedback ({allComments.length})</option>
+                  <option value="all">All Feedback ({activeComments.length})</option>
                   <option value="inquiry">Buyer Inquiries ({inquiryCount})</option>
                   <option value="negative">Complaints & Friction ({negativeCount})</option>
                   <option value="suggestion">Feature Requests ({suggestionCount})</option>
@@ -1423,22 +1512,6 @@ export default function CommentsPage() {
                     {uniqueTopics.map((t, idx) => (
                       <option key={idx} value={t}>
                         {t}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                {/* Product selector if multiple */}
-                {uniqueProducts.length > 1 && (
-                  <select
-                    value={productFilter}
-                    onChange={(e) => setProductFilter(e.target.value)}
-                    className="h-8 text-xs rounded-md border border-border bg-card px-2.5 text-foreground max-w-[160px]"
-                  >
-                    <option value="all">All Products</option>
-                    {uniqueProducts.map((p, idx) => (
-                      <option key={idx} value={p}>
-                        {p.slice(0, 30)}...
                       </option>
                     ))}
                   </select>
@@ -1684,7 +1757,7 @@ export default function CommentsPage() {
                   <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wide">
                     Sample Verified Feedback
                   </span>
-                  {allComments.slice(0, 3).map((c, idx) => (
+                  {activeComments.slice(0, 3).map((c, idx) => (
                     <div key={idx} className="text-xs text-muted-foreground bg-card p-2.5 rounded border border-border space-y-1">
                       <div className="flex items-center justify-between text-[10px]">
                         <span className="font-semibold text-foreground">{c.author_name || 'Buyer'}</span>
