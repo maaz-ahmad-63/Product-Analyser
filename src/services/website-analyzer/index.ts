@@ -776,6 +776,7 @@ export class WebsiteAnalyzerService {
       const seoAnalysis: SeoAnalysisResult = analyzeSeo(myProduct, competitorsData, targetKeywords)
 
       // 5. Public Comments
+      const existingCommentsAnalysis = record.commentsAnalysis as unknown as CommentsAnalysisResult | null
       const scrapedCommentsMap: Record<string, any[]> = {}
       await Promise.all(
         competitorsData.map(async (comp) => {
@@ -787,13 +788,30 @@ export class WebsiteAnalyzerService {
           }
         })
       )
-      const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+      let commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(competitorsData, scrapedCommentsMap)
+
+      // Safe Non-Destructive Guard: If scraping comments yielded empty results
+      // (e.g. serverless environment without python stealth scraper, or temporary scraper limit),
+      // NEVER wipe out existing valid comments analysis!
+      if (
+        (commentsAnalysis.all_comments?.length === 0 || commentsAnalysis.total_analyzed === 0) &&
+        existingCommentsAnalysis &&
+        ((existingCommentsAnalysis.all_comments && existingCommentsAnalysis.all_comments.length > 0) ||
+          (existingCommentsAnalysis.total_analyzed && existingCommentsAnalysis.total_analyzed > 0))
+      ) {
+        console.warn(`[WebsiteAnalyzer] Refresh comment scraper returned 0 comments for ${id}; preserving existing non-empty comments analysis.`)
+        commentsAnalysis = existingCommentsAnalysis
+      }
 
       // 6. Opportunity Detection
-      const opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
+      let opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
         commentsAnalysis.recurring_complaints,
         myProduct
       )
+
+      if (opportunities.length === 0 && Array.isArray(record.opportunitiesData) && (record.opportunitiesData as any[]).length > 0) {
+        opportunities = record.opportunitiesData as unknown as OpportunityRecord[]
+      }
 
       if (opportunities.length > 0) {
         try {

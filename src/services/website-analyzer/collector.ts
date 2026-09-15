@@ -906,5 +906,36 @@ export async function fetchProductPublicComments(url: string): Promise<Array<{
     console.warn(`Could not query database for synced threads (${url}):`, dbErr)
   }
 
+  // Fallback 2: Check existing comparison analyses for cached comments on this competitor URL
+  try {
+    const existing = await prisma.comparisonAnalysis.findFirst({
+      where: {
+        OR: [
+          { competitorUrl: { contains: url } },
+          { competitorUrls: { has: url } },
+        ],
+      },
+      select: { commentsAnalysis: true },
+      orderBy: { updatedAt: 'desc' },
+    })
+    if (existing?.commentsAnalysis) {
+      const ca = existing.commentsAnalysis as any
+      const matchingComments = ca.all_comments?.filter(
+        (c: any) => c.product_url === url || (url.includes(c.product_url) && c.product_url?.length > 10)
+      )
+      if (matchingComments && matchingComments.length > 0) {
+        return matchingComments.map((c: any) => ({
+          author_name: c.author_name || 'Public Member',
+          comment_text: c.comment_text,
+          comment_date: c.comment_date || 'Recent public comment',
+          comment_url: c.comment_url || null,
+          rating: c.rating ?? null,
+        }))
+      }
+    }
+  } catch (dbErr) {
+    console.warn(`Could not query database for cached comments (${url}):`, dbErr)
+  }
+
   return []
 }
