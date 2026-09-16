@@ -259,7 +259,286 @@ async function runStealthScraper(url: string): Promise<StealthScraperOutput | nu
 }
 
 /**
- * Amazon-specific scraper using crawl4ai (superior anti-bot bypass).
+ * Parse raw Amazon HTML into StealthScraperOutput using Cheerio & Regex.
+ * Enables zero-dependency parsing for ScraperAPI on Vercel / serverless.
+ */
+export function parseAmazonHtml(html: string, url: string): StealthScraperOutput | null {
+  if (!html || html.length < 200) return null
+
+  // Check for bot blocks / captcha
+  if (
+    html.includes('validateCaptcha') ||
+    html.includes('Type the characters') ||
+    html.toLowerCase().includes('robot check') ||
+    html.includes('api-services-support@amazon.com')
+  ) {
+    return null
+  }
+
+  const $ = cheerio.load(html)
+
+  // Title
+  let title = $('#productTitle').text().trim() || $('#title').text().trim()
+  if (!title) {
+    const ogTitle = $('meta[property="og:title"]').attr('content') || ''
+    if (ogTitle && ogTitle.includes('Amazon')) {
+      title = ogTitle.split(/[:|]/)[0].trim()
+    }
+  }
+  if (!title) {
+    const rawTitle = $('title').text().trim()
+    title = rawTitle.replace(/\s*[-–]\s*Amazon\.(com|in|co\.uk|de).*$/i, '').split(/[:|]/)[0].trim()
+  }
+
+  // Description
+  const description =
+    $('meta[name="description"]').attr('content')?.trim() ||
+    $('meta[property="og:description"]').attr('content')?.trim() ||
+    ''
+
+  // Thumbnail
+  const thumbnailUrl =
+    $('#landingImage').attr('src') ||
+    $('#landingImage').attr('data-old-hires') ||
+    $('#imgBlkFront').attr('src') ||
+    $('meta[property="og:image"]').attr('content') ||
+    null
+
+  // Price
+  let priceText = ''
+  const visiblePriceInput = $('input[name*="customerVisiblePrice"]').val()
+  if (typeof visiblePriceInput === 'string' && visiblePriceInput.trim()) {
+    priceText = visiblePriceInput.trim()
+  }
+  if (!priceText) {
+    const offscreen = $('#corePrice_feature_div .a-offscreen, #corePriceDisplay_desktop_feature_div .a-offscreen, #apexPriceToPay .a-offscreen')
+      .first()
+      .text()
+      .trim()
+    if (offscreen && /[\d,]{2,}/.test(offscreen)) {
+      priceText = offscreen
+    }
+  }
+  if (!priceText) {
+    const offscreenGeneric = $('.a-price .a-offscreen').first().text().trim()
+    if (offscreenGeneric && /(?:₹|\$|€|£|Rs\.?)\s*[\d,]+/i.test(offscreenGeneric)) {
+      priceText = offscreenGeneric
+    }
+  }
+  if (!priceText) {
+    const blockPrice = $('#priceblock_ourprice, #priceblock_dealprice, #priceblock_saleprice').first().text().trim()
+    if (blockPrice) priceText = blockPrice
+  }
+
+  // Strikethrough price
+  const strikethroughPrice: string | null =
+    $('.a-text-price .a-offscreen, #basisPrice .a-offscreen').first().text().trim() || null
+
+  // Rating
+  let rating: number | null = null
+  const ratingText = $('#acrPopover span.a-icon-alt').first().text() || $('span[data-hook="rating-out-of-text"]').text()
+  const ratingMatch = (ratingText || html).match(/([0-9]\.[0-9])\s+out of 5/i)
+  if (ratingMatch) {
+    rating = parseFloat(ratingMatch[1])
+  }
+
+  // Review count
+  let reviewCount: number | null = null
+  const reviewCountText = $('#acrCustomerReviewText').text()
+  const countMatch = (reviewCountText || html).match(/([0-9,]+)\s+(?:global\s+)?(?:customer\s+)?ratings?/i)
+  if (countMatch) {
+    reviewCount = parseInt(countMatch[1].replace(/,/g, ''), 10)
+  }
+
+  // Sales velocity
+  let salesVelocity: string | null = null
+  const svEl = $('#social-proofing-faceout-title, [data-csa-c-item-type="social_proofing"]').text().trim()
+  const svMatch = (svEl || html).match(/([0-9,]+K?\+?\s+bought\s+in\s+past\s+month)/i)
+  if (svMatch) {
+    salesVelocity = svMatch[1].trim()
+  }
+
+  // Features (bullet points)
+  const features: string[] = []
+  $('#feature-bullets li .a-list-item, #featurebullets_feature_div li').each((_, el) => {
+    const text = $(el).text().trim().replace(/\s+/g, ' ')
+    const lower = text.toLowerCase()
+    const navWords = ['shift', 'skip to main', 'press enter', 'keyboard', 'checkout']
+    if (text.length >= 8 && text.length <= 400 && !features.includes(text) && !navWords.some((w) => lower.includes(w))) {
+      features.push(text)
+    }
+  })
+
+  // Specs
+  const specs: Record<string, string> = {}
+  $('.po-row').each((_, el) => {
+    const k = $(el).find('.po-title').text().trim().replace(/[:\s]+$/, '')
+    const v = $(el).find('.po-value').text().trim()
+    if (k && v && k !== v && !k.includes('Best Sellers') && !k.includes('Customer Reviews')) {
+      specs[k] = v
+    }
+  })
+  $('#productDetails_techSpec_section_1 tr, .prodDetTable tr').each((_, el) => {
+    const k = $(el).find('th').text().trim().replace(/[:\s]+$/, '')
+    const v = $(el).find('td').text().trim()
+    if (k && v && k !== v && k.length < 60 && !specs[k]) {
+      specs[k] = v
+    }
+  })
+
+  // BSR
+  let amazonBsr: AmazonBsrData | null = null
+  const bsrMatch = html.match(/#\s*([0-9,]+)\s+in\s+([A-Za-z ,&\-/]+?)(?:\s*<|\s*\(|\s*\n)/)
+  if (bsrMatch) {
+    const rank = parseInt(bsrMatch[1].replace(/,/g, ''), 10)
+    const cat = bsrMatch[2].trim().replace(/[,&\-\/]+$/, '')
+    if (rank < 10000000 && cat.length > 3 && cat.length < 80) {
+      amazonBsr = {
+        rank,
+        rankFormatted: `#${rank.toLocaleString()}`,
+        category: cat,
+        subcategories: [],
+        rawText: `#${rank.toLocaleString()} in ${cat}`,
+      }
+    }
+  }
+
+  // Pricing plans
+  const pricingPlans: PricingPlanExtracted[] = [
+    {
+      name: 'Standard Purchase',
+      priceMonthly: priceText || 'Standard Price',
+      priceAnnual: priceText || 'Standard Price',
+      features: features.slice(0, 4).length > 0 ? features.slice(0, 4) : ['Standard Amazon Purchase'],
+      isPopular: true,
+    },
+  ]
+
+  // Reviews / Comments
+  const comments: StealthScraperOutput['comments'] = []
+  $('[data-hook="review"]').each((_, el) => {
+    if (comments && comments.length >= 15) return
+    const author = $(el).find('.a-profile-name').text().trim() || 'Amazon Verified Buyer'
+    const body = $(el).find('[data-hook="review-body"] span').text().trim()
+    const date = $(el).find('[data-hook="review-date"]').text().trim() || 'Recently'
+    const rMatch = $(el).find('.review-rating').text().match(/([0-9]\.[0-9])/)
+    const rVal = rMatch ? parseFloat(rMatch[1]) : null
+    if (body.length > 10) {
+      comments?.push({
+        author_name: author,
+        comment_text: body.slice(0, 1000),
+        comment_date: date,
+        comment_url: null,
+        rating: rVal,
+      })
+    }
+  })
+
+  const envatoSales: EnvatoSalesData = {
+    product_name: title || 'Amazon Product',
+    product_url: url,
+    current_total_sales: null,
+    product_price: priceText || null,
+    discounted_price: strikethroughPrice,
+    rating,
+    rating_count: reviewCount,
+    review_count: reviewCount,
+    comment_count: comments?.length || 0,
+    publication_date: null,
+    last_update_date: null,
+    version: specs['Item model number'] || specs['Model'] || null,
+    author_name: specs['Brand'] || specs['Manufacturer'] || null,
+    category: 'Amazon Marketplace',
+    product_status: 'active',
+    sales_data_unavailable: false,
+    thumbnail_url: thumbnailUrl,
+  }
+
+  return {
+    success: true,
+    url,
+    finalUrl: url,
+    title: title || 'Amazon Product',
+    h1: title || 'Amazon Product',
+    description: description || title,
+    productName: title || 'Amazon Product',
+    priceText: priceText || 'Standard Price',
+    pricingPlans,
+    features: features.slice(0, 35),
+    integrations: [],
+    tags: [],
+    specs,
+    html,
+    isAmazon: true,
+    envatoSales,
+    amazonBsr,
+    amazonPurchaseBadge: salesVelocity,
+    thumbnailUrl,
+    headings: {
+      h1: title ? [title] : [],
+      h2: [],
+      h3: [],
+    },
+    imageAltsCount: $('img[alt]').length,
+    totalImagesCount: $('img').length,
+    canonicalUrl: url,
+    hasStructuredData: false,
+    structuredDataTypes: [],
+    demoLink: null,
+    docsLink: null,
+    changelogLink: null,
+    comments,
+  }
+}
+
+/**
+ * Fetch HTML via ScraperAPI (cloud proxy & residential IP rotation for Vercel/production).
+ */
+async function fetchScraperApi(url: string): Promise<string | null> {
+  const apiKey = process.env.SCRAPER_API_KEY
+  if (!apiKey) return null
+
+  try {
+    let countryCode = 'us'
+    if (url.includes('amazon.in')) countryCode = 'in'
+    else if (url.includes('amazon.co.uk')) countryCode = 'gb'
+    else if (url.includes('amazon.de')) countryCode = 'de'
+    else if (url.includes('amazon.ca')) countryCode = 'ca'
+
+    const scraperUrl = `https://api.scraperapi.com/?api_key=${apiKey}&url=${encodeURIComponent(url)}&country_code=${countryCode}&device_type=desktop`
+    console.log(`[collector] Fetching via ScraperAPI (country: ${countryCode}): ${url}`)
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 45000)
+
+    const res = await fetch(scraperUrl, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    })
+    clearTimeout(timeoutId)
+
+    if (!res.ok) {
+      console.warn(`ScraperAPI returned status ${res.status} for ${url}`)
+      return null
+    }
+
+    const html = await res.text()
+    if (html.length < 500 || html.includes('validateCaptcha') || html.includes('Robot Check')) {
+      console.warn(`ScraperAPI response was captcha or empty for ${url}`)
+      return null
+    }
+
+    return html
+  } catch (err) {
+    console.error(`ScraperAPI error for ${url}:`, err)
+    return null
+  }
+}
+
+/**
+ * Amazon-specific scraper using crawl4ai (superior anti-bot bypass for localhost/Docker).
  * Replaces Playwright-based scraping for amazon.com/amazon.in URLs.
  */
 async function runAmazonScraper(url: string): Promise<StealthScraperOutput | null> {
@@ -382,15 +661,32 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
     }
     if (!mainHtml) {
       if (isAmazonDomain) {
-        // Use crawl4ai-based Amazon scraper first (better anti-bot bypass)
-        console.log(`[collector] Using crawl4ai Amazon scraper for: ${normalized}`)
-        stealthResult = await runAmazonScraper(normalized)
-        if (stealthResult && (stealthResult.html || stealthResult.productName || stealthResult.title)) {
-          mainHtml = stealthResult.html || `<html><body>${stealthResult.productName || stealthResult.title}</body></html>`
-          finalUrl = stealthResult.finalUrl || normalized
+        // Strategy 1 (Cloud / Vercel): Use ScraperAPI if SCRAPER_API_KEY is configured
+        if (process.env.SCRAPER_API_KEY) {
+          console.log(`[collector] Attempting ScraperAPI for Amazon: ${normalized}`)
+          const scraperApiHtml = await fetchScraperApi(normalized)
+          if (scraperApiHtml) {
+            const parsed = parseAmazonHtml(scraperApiHtml, normalized)
+            if (parsed && (parsed.productName || parsed.priceText || parsed.title)) {
+              stealthResult = parsed
+              mainHtml = parsed.html || scraperApiHtml
+              finalUrl = parsed.finalUrl || normalized
+              console.log(`[collector] ScraperAPI successfully scraped Amazon: ${parsed.productName || parsed.title}`)
+            }
+          }
+        }
+
+        // Strategy 2 (Localhost / Docker): Use crawl4ai Python scraper if ScraperAPI didn't run or failed
+        if (!mainHtml) {
+          console.log(`[collector] Using crawl4ai Amazon scraper for: ${normalized}`)
+          stealthResult = await runAmazonScraper(normalized)
+          if (stealthResult && (stealthResult.html || stealthResult.productName || stealthResult.title)) {
+            mainHtml = stealthResult.html || `<html><body>${stealthResult.productName || stealthResult.title}</body></html>`
+            finalUrl = stealthResult.finalUrl || normalized
+          }
         }
       }
-      // Fallback: use Playwright stealth scraper (for non-Amazon or if crawl4ai failed)
+      // Fallback: use Playwright stealth scraper (for non-Amazon or if both above failed)
       if (!mainHtml) {
         stealthResult = await runStealthScraper(normalized)
         if (stealthResult && stealthResult.html) {
