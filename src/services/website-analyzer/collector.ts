@@ -414,22 +414,41 @@ export function parseAmazonHtml(html: string, url: string): StealthScraperOutput
     },
   ]
 
-  // Reviews / Comments
+  // Reviews / Comments (Customer verified reviews)
   const comments: StealthScraperOutput['comments'] = []
   $('[data-hook="review"]').each((_, el) => {
-    if (comments && comments.length >= 15) return
-    const author = $(el).find('.a-profile-name').text().trim() || 'Amazon Verified Buyer'
-    const body = $(el).find('[data-hook="review-body"] span').text().trim()
-    const date = $(el).find('[data-hook="review-date"]').text().trim() || 'Recently'
-    const rMatch = $(el).find('.review-rating').text().match(/([0-9]\.[0-9])/)
-    const rVal = rMatch ? parseFloat(rMatch[1]) : null
-    if (body.length > 10) {
+    if (comments && comments.length >= 30) return
+    const author = $(el).find('.a-profile-name').first().text().trim() || 'Amazon Verified Buyer'
+    const rTitle = $(el).find('[data-hook="reviewTitle"], [data-hook="review-title"], h5[class*="review-title"]').first().text().trim()
+
+    let rBody = $(el).find('[data-hook="review-body"]').text().trim()
+    if (!rBody) {
+      const pTexts: string[] = []
+      $(el).find('p').each((_, p) => {
+        const t = $(p).text().trim()
+        if (t.length > 5 && !t.includes('community guidelines') && !t.includes('Helpful') && !t.includes('Report')) {
+          pTexts.push(t)
+        }
+      })
+      rBody = pTexts.join(' ')
+    }
+
+    const date = $(el).find('[data-hook="review-date"]').first().text().trim() || 'Recently'
+    const permalink = $(el).find('a[href*="customer-reviews"], a[href*="review_title"]').first().attr('href') || null
+
+    const rText = $(el).find('[data-hook="review-star-rating"] .a-icon-alt, .review-rating .a-icon-alt, .a-icon-alt').first().text().trim()
+    const rMatch = rText.match(/([0-9]\.?[0-9]?)\s+out of/i)
+    const ratingVal = rMatch ? parseFloat(rMatch[1]) : null
+
+    const combinedText = rTitle && rBody ? `${rTitle} — ${rBody}` : (rBody || rTitle)
+
+    if (combinedText && combinedText.length > 8) {
       comments?.push({
         author_name: author,
-        comment_text: body.slice(0, 1000),
+        comment_text: combinedText.slice(0, 1500),
         comment_date: date,
-        comment_url: null,
-        rating: rVal,
+        comment_url: permalink ? (permalink.startsWith('http') ? permalink : `https://www.amazon.in${permalink}`) : null,
+        rating: ratingVal,
       })
     }
   })
