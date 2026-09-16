@@ -135,10 +135,7 @@ export class WebsiteAnalyzerService {
         }
       }
 
-      // 3. Deterministic rule-based product comparison
-      const { comparison, recommendations } = compareProducts(myProduct, primaryCompetitor)
-
-      // 4. Public Comments & Reviews Scraping and Recurring Complaint Analysis (includes both own product and competitors)
+      // 3. Public Comments & Reviews Scraping and Recurring Complaint Analysis (includes both own product and competitors)
       const allAnalysisProducts = [myProduct, ...competitorsData]
       const scrapedCommentsMap: Record<string, any[]> = {}
       await Promise.all(
@@ -153,6 +150,9 @@ export class WebsiteAnalyzerService {
       )
 
       const commentsAnalysis: CommentsAnalysisResult = await analyzeCompetitorComments(allAnalysisProducts, scrapedCommentsMap)
+
+      // 4. Deterministic rule-based product comparison across ALL competitors
+      const { comparison, recommendations } = compareProducts(myProduct, competitorsData, commentsAnalysis)
 
       // 5. Comprehensive SEO Analysis with Historical Ranking Tracking & Customer Demand Cross-Referencing
       const previousObservations = await prisma.seoKeywordObservation.findMany({
@@ -217,7 +217,8 @@ export class WebsiteAnalyzerService {
       )
       const opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
         competitorComplaints,
-        myProduct
+        myProduct,
+        competitorsData
       )
 
       // Persist individual opportunities into database
@@ -523,14 +524,12 @@ export class WebsiteAnalyzerService {
 
     const existingComps = (record.competitorsData as unknown as ExtractedProductData[]) || (record.competitorProduct ? [record.competitorProduct as unknown as ExtractedProductData] : [])
     const allComps = [...existingComps, newCompData]
-
     const myProduct = record.myProduct as unknown as ExtractedProductData
 
-    // Re-run SEO analysis
-    const seoAnalysis = analyzeSeo(myProduct, allComps)
-
-    // Re-run public comments for new competitor
+    // 1. Fetch public comments for new competitor
     const scrapedComments = await fetchProductPublicComments(newUrl)
+    newCompData.comments = scrapedComments
+
     const existingCommentsAnalysis = (record.commentsAnalysis as unknown as CommentsAnalysisResult) || {
       summaries: [],
       recurring_complaints: [],
@@ -542,28 +541,56 @@ export class WebsiteAnalyzerService {
     const newCommentsResult = await analyzeCompetitorComments([newCompData], { [newUrl]: scrapedComments })
 
     const mergedCommentsAnalysis: CommentsAnalysisResult = {
-      summaries: [...(existingCommentsAnalysis.summaries || []), ...newCommentsResult.summaries],
+      summaries: [...(existingCommentsAnalysis.summaries || []).filter((s) => s.product_url !== newUrl), ...newCommentsResult.summaries],
       recurring_complaints: [
-        ...(existingCommentsAnalysis.recurring_complaints || []),
+        ...(existingCommentsAnalysis.recurring_complaints || []).filter((c) => c.competitor_url !== newUrl),
         ...newCommentsResult.recurring_complaints,
       ],
-      comments: [...(existingCommentsAnalysis.comments || []), ...newCommentsResult.comments],
+      comments: [...(existingCommentsAnalysis.comments || []).filter((c) => c.product_url !== newUrl), ...newCommentsResult.comments],
       total_analyzed: (existingCommentsAnalysis.total_analyzed || 0) + newCommentsResult.total_analyzed,
       unresolved_count: (existingCommentsAnalysis.unresolved_count || 0) + newCommentsResult.unresolved_count,
       unavailable_competitors: [
-        ...(existingCommentsAnalysis.unavailable_competitors || []),
+        ...(existingCommentsAnalysis.unavailable_competitors || []).filter((u) => u !== newUrl),
         ...newCommentsResult.unavailable_competitors,
       ],
+      positive_count: (existingCommentsAnalysis.positive_count || 0) + (newCommentsResult.positive_count || 0),
+      negative_count: (existingCommentsAnalysis.negative_count || 0) + (newCommentsResult.negative_count || 0),
+      neutral_count: (existingCommentsAnalysis.neutral_count || 0) + (newCommentsResult.neutral_count || 0),
+      clusters: [
+        ...(existingCommentsAnalysis.recurring_complaints || []).filter((c) => c.competitor_url !== newUrl),
+        ...newCommentsResult.recurring_complaints,
+      ],
+      topComplaints: [
+        ...(existingCommentsAnalysis.recurring_complaints || []).filter((c) => c.competitor_url !== newUrl),
+        ...newCommentsResult.recurring_complaints,
+      ].slice(0, 5),
+      competitor_summaries: [...(existingCommentsAnalysis.summaries || []).filter((s) => s.product_url !== newUrl), ...newCommentsResult.summaries],
     }
 
-    // Re-run opportunities using recurring complaints
-    const newOpportunities = detectOpportunitiesFromRecurringComplaints(
-      newCommentsResult.recurring_complaints,
-      myProduct
+    // 2. Multi-Competitor Product Comparison (Re-calculated across ALL competitors)
+    const { comparison, recommendations } = compareProducts(myProduct, allComps, mergedCommentsAnalysis)
+
+    // 3. Multi-Competitor SEO Analysis (Re-calculated across ALL competitors)
+    const targetKeywords = (record.seoAnalysis as any)?.target_keywords || []
+    const seoAnalysis = analyzeSeo(myProduct, allComps, targetKeywords, {}, mergedCommentsAnalysis)
+
+    // 4. Multi-Competitor Opportunities (Re-calculated across ALL competitor complaints)
+    const allCompetitorComplaints = (mergedCommentsAnalysis.recurring_complaints || []).filter(
+      (c) => c.competitor_url !== record.myUrl && c.competitor_url !== myProduct.url
     )
-    if (newOpportunities.length > 0) {
+    const allOpportunities = detectOpportunitiesFromRecurringComplaints(
+      allCompetitorComplaints,
+      myProduct,
+      allComps
+    )
+
+    // Replace opportunities in database so results are never stale
+    await prisma.competitorOpportunity.deleteMany({
+      where: { analysisId: record.id },
+    })
+    if (allOpportunities.length > 0) {
       await prisma.competitorOpportunity.createMany({
-        data: newOpportunities.map((opp) => ({
+        data: allOpportunities.map((opp) => ({
           analysisId: record.id,
           userId: record.userId || null,
           competitorUrl: opp.competitor_url,
@@ -581,13 +608,44 @@ export class WebsiteAnalyzerService {
       })
     }
 
+    // 5. Recalculate Sales Analysis across all competitors
+    let mySalesAnalysis: ProductSalesAnalysis | null = null
+    const competitorSalesList: ProductSalesAnalysis[] = []
+    const competitorSalesMap: Record<string, ProductSalesAnalysis> = {}
+
+    if (myProduct?.envatoSales || record.myUrl.includes('codecanyon.net') || record.myUrl.includes('themeforest.net')) {
+      mySalesAnalysis = await calculateProductSalesAnalysis(record.myUrl, myProduct?.envatoSales)
+    }
+
+    for (const comp of allComps) {
+      if (comp.envatoSales || comp.url.includes('codecanyon.net') || comp.url.includes('themeforest.net')) {
+        const s = await calculateProductSalesAnalysis(comp.url, comp.envatoSales)
+        competitorSalesList.push(s)
+        competitorSalesMap[comp.productName] = s
+      }
+    }
+
+    // 6. Recalculate Cross-Functional Insights
+    const insights = generateUnifiedInsights(
+      myProduct,
+      allComps,
+      mySalesAnalysis,
+      competitorSalesMap,
+      seoAnalysis,
+      mergedCommentsAnalysis
+    )
+
     await prisma.comparisonAnalysis.update({
       where: { id },
       data: {
         competitorUrls: updatedUrls,
         competitorsData: JSON.parse(JSON.stringify(allComps)),
+        comparison: JSON.parse(JSON.stringify(comparison)),
+        recommendations: JSON.parse(JSON.stringify(recommendations)),
         seoAnalysis: JSON.parse(JSON.stringify(seoAnalysis)),
         commentsAnalysis: JSON.parse(JSON.stringify(mergedCommentsAnalysis)),
+        opportunitiesData: JSON.parse(JSON.stringify(allOpportunities)),
+        insights: JSON.parse(JSON.stringify(insights)),
         completedAt: new Date(),
       },
     })
@@ -596,7 +654,7 @@ export class WebsiteAnalyzerService {
   }
 
   /**
-   * Removes a competitor URL from an existing project.
+   * Removes a competitor URL from an existing project and refreshes all modules across remaining competitors.
    */
   async removeCompetitorFromProject(
     id: string,
@@ -623,7 +681,57 @@ export class WebsiteAnalyzerService {
     const remainingComps = existingComps.filter((c) => c.url !== normRemove && c.url !== competitorUrlToRemove)
 
     const myProduct = record.myProduct as unknown as ExtractedProductData
-    const seoAnalysis = analyzeSeo(myProduct, remainingComps)
+
+    // 1. Filter comments analysis to eliminate removed competitor data
+    const existingCommentsAnalysis = (record.commentsAnalysis as unknown as CommentsAnalysisResult) || {
+      summaries: [],
+      recurring_complaints: [],
+      comments: [],
+      total_analyzed: 0,
+      unresolved_count: 0,
+      unavailable_competitors: [],
+    }
+
+    const filteredSummaries = (existingCommentsAnalysis.summaries || []).filter(
+      (s) => s.product_url !== normRemove && s.product_url !== competitorUrlToRemove
+    )
+    const filteredRecurring = (existingCommentsAnalysis.recurring_complaints || []).filter(
+      (c) => c.competitor_url !== normRemove && c.competitor_url !== competitorUrlToRemove
+    )
+    const filteredComments = (existingCommentsAnalysis.comments || []).filter(
+      (c) => c.product_url !== normRemove && c.product_url !== competitorUrlToRemove
+    )
+
+    const filteredCommentsAnalysis: CommentsAnalysisResult = {
+      ...existingCommentsAnalysis,
+      summaries: filteredSummaries,
+      recurring_complaints: filteredRecurring,
+      comments: filteredComments,
+      total_analyzed: filteredComments.length,
+      positive_count: filteredSummaries.reduce((acc, s) => acc + (s.positive_count || 0), 0),
+      negative_count: filteredSummaries.reduce((acc, s) => acc + (s.negative_count || 0), 0),
+      neutral_count: filteredSummaries.reduce((acc, s) => acc + (s.neutral_count || 0), 0),
+      clusters: filteredRecurring,
+      topComplaints: filteredRecurring.slice(0, 5),
+      competitor_summaries: filteredSummaries,
+    }
+
+    // 2. Re-run comparison across remaining competitors
+    const { comparison, recommendations } = compareProducts(myProduct, remainingComps, filteredCommentsAnalysis)
+
+    // 3. Re-run SEO analysis across remaining competitors
+    const targetKeywords = (record.seoAnalysis as any)?.target_keywords || []
+    const seoAnalysis = analyzeSeo(myProduct, remainingComps, targetKeywords, {}, filteredCommentsAnalysis)
+
+    // 4. Re-run opportunities using remaining competitor complaints
+    const remainingCompetitorComplaints = filteredRecurring.filter(
+      (c) => c.competitor_url !== record.myUrl && c.competitor_url !== myProduct.url
+    )
+    const remainingOpportunities = detectOpportunitiesFromRecurringComplaints(
+      remainingCompetitorComplaints,
+      myProduct,
+      remainingComps
+    )
 
     // Remove opportunities related to removed competitor
     await prisma.competitorOpportunity.deleteMany({
@@ -633,13 +741,46 @@ export class WebsiteAnalyzerService {
       },
     })
 
+    // 5. Recalculate Sales Analysis across remaining competitors
+    let mySalesAnalysis: ProductSalesAnalysis | null = null
+    const competitorSalesList: ProductSalesAnalysis[] = []
+    const competitorSalesMap: Record<string, ProductSalesAnalysis> = {}
+
+    if (myProduct?.envatoSales || record.myUrl.includes('codecanyon.net') || record.myUrl.includes('themeforest.net')) {
+      mySalesAnalysis = await calculateProductSalesAnalysis(record.myUrl, myProduct?.envatoSales)
+    }
+
+    for (const comp of remainingComps) {
+      if (comp.envatoSales || comp.url.includes('codecanyon.net') || comp.url.includes('themeforest.net')) {
+        const s = await calculateProductSalesAnalysis(comp.url, comp.envatoSales)
+        competitorSalesList.push(s)
+        competitorSalesMap[comp.productName] = s
+      }
+    }
+
+    // 6. Recalculate Cross-Functional Insights
+    const insights = generateUnifiedInsights(
+      myProduct,
+      remainingComps,
+      mySalesAnalysis,
+      competitorSalesMap,
+      seoAnalysis,
+      filteredCommentsAnalysis
+    )
+
     await prisma.comparisonAnalysis.update({
       where: { id },
       data: {
         competitorUrl: updatedUrls[0],
         competitorUrls: updatedUrls,
         competitorsData: JSON.parse(JSON.stringify(remainingComps)),
+        comparison: JSON.parse(JSON.stringify(comparison)),
+        recommendations: JSON.parse(JSON.stringify(recommendations)),
         seoAnalysis: JSON.parse(JSON.stringify(seoAnalysis)),
+        commentsAnalysis: JSON.parse(JSON.stringify(filteredCommentsAnalysis)),
+        opportunitiesData: JSON.parse(JSON.stringify(remainingOpportunities)),
+        insights: JSON.parse(JSON.stringify(insights)),
+        completedAt: new Date(),
       },
     })
 
@@ -782,14 +923,7 @@ export class WebsiteAnalyzerService {
         }
       }
 
-      // 3. Multi-Competitor Product Comparison
-      const { comparison, recommendations } = compareProducts(myProduct, primaryCompetitor)
-
-      // 4. On-Page SEO Analysis
-      const targetKeywords = (record.seoAnalysis as any)?.target_keywords || []
-      const seoAnalysis: SeoAnalysisResult = analyzeSeo(myProduct, competitorsData, targetKeywords)
-
-      // 5. Public Comments (includes both own product and competitors)
+      // 3. Public Comments (includes both own product and competitors)
       const existingCommentsAnalysis = record.commentsAnalysis as unknown as CommentsAnalysisResult | null
       const allAnalysisProducts = [myProduct, ...competitorsData]
       const scrapedCommentsMap: Record<string, any[]> = {}
@@ -818,13 +952,21 @@ export class WebsiteAnalyzerService {
         commentsAnalysis = existingCommentsAnalysis
       }
 
+      // 4. Multi-Competitor Product Comparison (Re-calculated across ALL competitors)
+      const { comparison, recommendations } = compareProducts(myProduct, competitorsData, commentsAnalysis)
+
+      // 5. On-Page SEO Analysis
+      const targetKeywords = (record.seoAnalysis as any)?.target_keywords || []
+      const seoAnalysis: SeoAnalysisResult = analyzeSeo(myProduct, competitorsData, targetKeywords, {}, commentsAnalysis)
+
       // 6. Opportunity Detection (only from competitor complaints)
       const competitorComplaints = commentsAnalysis.recurring_complaints.filter(
         (c) => c.competitor_url !== record.myUrl && c.competitor_url !== myProduct.url
       )
       let opportunities: OpportunityRecord[] = detectOpportunitiesFromRecurringComplaints(
         competitorComplaints,
-        myProduct
+        myProduct,
+        competitorsData
       )
 
       if (opportunities.length === 0 && Array.isArray(record.opportunitiesData) && (record.opportunitiesData as any[]).length > 0) {

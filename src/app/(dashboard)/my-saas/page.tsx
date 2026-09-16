@@ -31,6 +31,7 @@ import {
   Eye,
   MessageSquare,
   Star as StarIcon,
+  X,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -133,6 +134,7 @@ export default function MySaaSPage() {
   const [selectedProductKey, setSelectedProductKey] = useState<string>('target')
 
   const [eventsModalOpen, setEventsModalOpen] = useState(false)
+  const [showBsrModal, setShowBsrModal] = useState(false)
   const [eventsModalFilter, setEventsModalFilter] = useState<string>('all')
   const [eventsModalTypeFilter, setEventsModalTypeFilter] = useState<'all'|'sale'|'review'|'comment'>('all')
   const [eventsModalSearch, setEventsModalSearch] = useState<string>('')
@@ -155,6 +157,7 @@ export default function MySaaSPage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setEventsModalOpen(false)
+        setShowBsrModal(false)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -173,8 +176,27 @@ export default function MySaaSPage() {
   const salesTimeline = mySalesAnalysis?.sales_activity_timeline || null
   const targetName = currentProjectMeta?.ownProduct?.name || (myProduct as any).productName || (myProduct as any).websiteTitle || currentProjectMeta?.name || 'Target Product'
   const targetUrl = currentProjectMeta?.ownProduct?.url || (myProduct as any).url || '#'
+  
+  const isAmazonWorkspace =
+    currentProjectMeta?.platform === 'amazon' ||
+    Boolean(myProduct.url && /amazon\.[a-z.]+/i.test(myProduct.url))
+  const marketPosition = currentProjectData?.comparison?.marketPosition
+  const hasBsr = Boolean(
+    isAmazonWorkspace &&
+    marketPosition &&
+    (marketPosition.myRank !== null || marketPosition.competitorBsrs?.some((c: any) => c.rank !== null))
+  )
+
   const commentsAnalysis = currentProjectData?.comments_analysis || null
   const allComments: any[] = commentsAnalysis?.all_comments || commentsAnalysis?.comments || []
+  const summaries: any[] = commentsAnalysis?.summaries || commentsAnalysis?.competitor_summaries || []
+  const ownSummary = summaries.find((s: any) =>
+    (targetUrl && s.product_url === targetUrl) ||
+    (s.product_name && s.product_name.toLowerCase().includes('rideon')) ||
+    (targetName && s.product_name && s.product_name.toLowerCase().includes(targetName.toLowerCase().slice(0, 15)))
+  )
+  const ownCommentsCount = ownSummary?.total_comments || (myProduct as any).comments?.length || (allComments.filter((c: any) => (c.product_name && c.product_name.toLowerCase().includes('rideon')) || (targetUrl && c.product_url === targetUrl)).length) || 0
+  const ownMarketplaceComments = (myProduct as any)?.envatoSales?.comment_count || ownCommentsCount
 
   // ── Helper: convert a PublicComment → unified timeline event ──
   const commentToEvent = (c: any, isTarget: boolean, pName: string, pUrl: string, idx: number, prefix: string) => {
@@ -478,18 +500,27 @@ export default function MySaaSPage() {
   // 1. Key Takeaway calculation
   const targetSalesCount = getProductSales(myProduct, mySalesAnalysis)
   const targetPriceStr = getProductPrice(myProduct)
-  const keyTakeaway = targetSalesCount !== 'Not available'
-    ? `Your product has accumulated ${targetSalesCount} verified sales at a list price of ${targetPriceStr}.`
-    : `Public pricing cataloged at ${targetPriceStr}. Historical sales telemetry waiting for marketplace connector verification.`
+  const amzPurchaseBadge = (myProduct as any)?.amazonPurchaseBadge || (targetSalesCount !== 'Not available' ? `${targetSalesCount}+ bought in past month` : null)
+  const keyTakeaway = isAmazonWorkspace
+    ? (amzPurchaseBadge
+        ? `Public purchase signal: ${amzPurchaseBadge} at a list price of ${targetPriceStr}.`
+        : `Public pricing cataloged at ${targetPriceStr}. Public monthly purchase badge not observed on listing.`)
+    : (targetSalesCount !== 'Not available'
+        ? `Your product has accumulated ${targetSalesCount} verified sales at a list price of ${targetPriceStr}.`
+        : `Public pricing cataloged at ${targetPriceStr}. Historical sales telemetry waiting for marketplace connector verification.`)
 
   // 3. Main Insight calculation
   const mainInsightTitle = competitors.length > 0
     ? `Commercial Positioning vs ${competitors.length} Monitored Rival${competitors.length === 1 ? '' : 's'}`
     : `Single Product Commercial Baseline`
 
-  const mainInsightDesc = competitors.length > 0
-    ? `List price (${targetPriceStr}) and unit volume (${targetSalesCount}) benchmarked directly against indexed competitor landing pages.`
-    : `Catalog telemetry captured from public landing page and commercial specification tables.`
+  const mainInsightDesc = isAmazonWorkspace
+    ? (competitors.length > 0
+        ? `List price (${targetPriceStr}) and public purchase signals benchmarked directly against indexed competitor landing pages.`
+        : `Catalog telemetry captured from public landing page and commercial specification tables.`)
+    : (competitors.length > 0
+        ? `List price (${targetPriceStr}) and unit volume (${targetSalesCount}) benchmarked directly against indexed competitor landing pages.`
+        : `Catalog telemetry captured from public landing page and commercial specification tables.`)
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -604,8 +635,70 @@ export default function MySaaSPage() {
         </div>
       </Card>
 
+      {/* 1b. MARKET POSITION (Strictly Amazon workspaces with BSR telemetry) */}
+      {hasBsr && marketPosition && (
+        <Card className="border-primary/30 bg-primary/5 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px] uppercase font-bold tracking-wider text-primary border-primary/40">
+                  Market Position (BSR)
+                </Badge>
+                {marketPosition?.myCategory && (
+                  <Badge variant="secondary" className="text-[10px]">
+                    {marketPosition.myCategory}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-5 pt-1">
+                <div>
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+                    Your BSR
+                  </span>
+                  <span className="text-xl font-bold text-foreground">
+                    {marketPosition?.myBsrFormatted}
+                  </span>
+                </div>
+                <div className="border-l border-border pl-5">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+                    Competitor BSR Range
+                  </span>
+                  <span className="text-xl font-bold text-primary">
+                    {marketPosition?.competitorBsrRange || marketPosition?.marketRange}
+                  </span>
+                </div>
+                {(marketPosition?.bestObservedCompetitor || marketPosition?.strongestCompetitor) && (
+                  <div className="border-l border-border pl-5 hidden sm:block">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+                      Best Observed Competitor Rank
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">
+                      {(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.name} ({(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.bsrFormatted})
+                    </span>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {marketPosition?.relativePositionText}
+              </p>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBsrModal(true)}
+              className="shrink-0 gap-1.5 text-xs h-8 border-primary/40 hover:bg-primary/10"
+            >
+              <TrendingUp className="h-3.5 w-3.5 text-primary" />
+              <span>View BSR Details</span>
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* 2. KEY METRICS */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Card className="border-border bg-card p-3.5">
           <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
             List Price
@@ -614,35 +707,48 @@ export default function MySaaSPage() {
             {getProductPrice(myProduct)}
           </div>
           <span className="text-[10px] text-muted-foreground mt-0.5 block">
-            {(myProduct?.pricingPlans?.[0] as any)?.interval || (myProduct?.envatoSales ? 'Commercial license' : 'Catalog price')}
+            {isAmazonWorkspace
+              ? 'Current price'
+              : ((myProduct?.pricingPlans?.[0] as any)?.interval || (myProduct?.envatoSales ? 'Commercial license' : 'Catalog price'))}
           </span>
         </Card>
 
         <Card className="border-border bg-card p-3.5 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
-              {timeRange === 'all' ? 'Verified Sales' : `Sales (${timeRange === 'today' ? 'Today' : timeRange === '7d' ? 'Last 7 Days' : 'Last 30 Days'})`}
+              {isAmazonWorkspace ? 'Purchase Signal (Past Month)' : (timeRange === 'all' ? 'Verified Sales' : `Sales (${timeRange === 'today' ? 'Today' : timeRange === '7d' ? 'Last 7 Days' : 'Last 30 Days'})`)}
             </span>
-            {mySalesAnalysis?.last_sales_increase && (
+            {!isAmazonWorkspace && mySalesAnalysis?.last_sales_increase && (
               <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/10 text-emerald-400 border-emerald-500/30 font-mono">
                 +1 sale
               </Badge>
             )}
           </div>
           <div className="text-xl font-bold text-foreground mt-1 flex items-baseline gap-2">
-            {timeRange === 'all' ? (
-              <span>{getProductSales(myProduct, mySalesAnalysis)}</span>
+            {isAmazonWorkspace ? (
+              <span className="text-base font-bold text-foreground">
+                {amzPurchaseBadge || (targetSalesCount !== 'Not available' ? `${targetSalesCount}+ bought` : 'Not publicly observed')}
+              </span>
             ) : (
-              <>
-                <span className="text-emerald-400 font-extrabold">
-                  {getSalesVolumeByTimeRange(true, myProduct) >= 0 ? `+${getSalesVolumeByTimeRange(true, myProduct)}` : getSalesVolumeByTimeRange(true, myProduct)}
-                </span>
-                <span className="text-xs text-muted-foreground font-normal">
-                  units ({getProductSales(myProduct, mySalesAnalysis)} total)
-                </span>
-              </>
+              timeRange === 'all' ? (
+                <span>{getProductSales(myProduct, mySalesAnalysis)}</span>
+              ) : (
+                <>
+                  <span className="text-emerald-400 font-extrabold">
+                    {getSalesVolumeByTimeRange(true, myProduct) >= 0 ? `+${getSalesVolumeByTimeRange(true, myProduct)}` : getSalesVolumeByTimeRange(true, myProduct)}
+                  </span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    units ({getProductSales(myProduct, mySalesAnalysis)} total)
+                  </span>
+                </>
+              )
             )}
           </div>
+          <span className="text-[10px] text-muted-foreground mt-0.5 block">
+            {isAmazonWorkspace
+              ? 'Public Amazon purchase badge'
+              : (mySalesAnalysis?.last_sales_increase ? 'Marketplace sales increases' : 'Verified marketplace sales count')}
+          </span>
           {mySalesAnalysis?.last_sales_increase ? (
             <div className="mt-1 pt-1 border-t border-border/40 text-[10px] text-muted-foreground flex flex-col gap-0.5">
               <span className="flex items-center gap-1 text-emerald-400 font-medium">
@@ -677,6 +783,26 @@ export default function MySaaSPage() {
             customer satisfaction
           </span>
         </Card>
+
+        <Link href="/dashboard/comments" className="block group">
+          <Card className="border-border bg-card p-3.5 h-full group-hover:border-primary/60 group-hover:bg-muted/20 transition-all cursor-pointer">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
+                Total Comments
+              </span>
+              <span className="text-[9px] text-muted-foreground/70 group-hover:text-primary">
+                Feedback →
+              </span>
+            </div>
+            <div className="text-xl font-bold text-foreground mt-1 flex items-center gap-1.5 text-primary">
+              <MessageSquare className="h-4 w-4 text-primary" />
+              <span>{ownMarketplaceComments && ownMarketplaceComments > ownCommentsCount ? `${ownCommentsCount} / ${ownMarketplaceComments}` : ownCommentsCount}</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground mt-0.5 block">
+              {ownSummary?.positive_count ? `${ownSummary.positive_count} pos · ` : ''}{ownSummary?.negative_count ? `${ownSummary.negative_count} complaints` : 'analyzed discussions'}
+            </span>
+          </Card>
+        </Link>
 
         <Card className="border-border bg-card p-3.5">
           <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
@@ -1607,6 +1733,206 @@ export default function MySaaSPage() {
                 className="h-7 text-xs"
               >
                 Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BSR MARKET POSITION DETAILS MODAL (Phase 2 - Platform Gated) */}
+      {showBsrModal && marketPosition && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in-0"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowBsrModal(false)
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-border/80 flex items-start justify-between gap-3 bg-muted/20">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-[10px] font-bold tracking-wider text-primary border-primary/30 bg-primary/10">
+                    BSR MARKET POSITION
+                  </Badge>
+                  {marketPosition.myCategory && (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {marketPosition.myCategory}
+                    </Badge>
+                  )}
+                </div>
+                <h2 className="text-lg sm:text-xl font-bold text-foreground">
+                  Best Sellers Rank & Relative Market Positioning
+                </h2>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  Public Best Sellers Rank (BSR) comparison across your product and all added competitors. Note: BSR reflects relative sales velocity on Amazon and is never fabricated or converted into units/revenue.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowBsrModal(false)}
+                className="h-8 w-8 p-0 rounded-full text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Summary Bar */}
+            <div className="p-3 sm:p-4 border-b border-border/60 bg-muted/10 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-4">
+                <div>
+                  <span className="text-muted-foreground">Your BSR:</span>{' '}
+                  <strong className="text-foreground">{marketPosition.myBsrFormatted}</strong>
+                </div>
+                <div className="border-l border-border pl-4">
+                  <span className="text-muted-foreground">Competitor BSR Range:</span>{' '}
+                  <strong className="text-primary">{marketPosition.competitorBsrRange || marketPosition.marketRange}</strong>
+                </div>
+                {(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor) && (
+                  <div className="border-l border-border pl-4 hidden sm:block">
+                    <span className="text-muted-foreground">Best Observed Competitor:</span>{' '}
+                    <strong className="text-foreground">
+                      {(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.name} ({(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.bsrFormatted})
+                    </strong>
+                  </div>
+                )}
+              </div>
+              <span className="text-muted-foreground italic">
+                {marketPosition.historicalObservationsNote}
+              </span>
+            </div>
+
+            {/* Competitor-by-Competitor Evidence List */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+              {/* Target Product Entry */}
+              <Card className="border-primary/40 bg-primary/5 p-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-primary text-primary-foreground text-[10px]">
+                        YOUR PRODUCT
+                      </Badge>
+                      <span className="font-bold text-sm text-foreground">
+                        {myProduct.productName || 'Your Product'}
+                      </span>
+                    </div>
+                    {myProduct.url && (
+                      <span className="text-[11px] text-muted-foreground block truncate max-w-md">
+                        {myProduct.url}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 text-right">
+                    <div>
+                      <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                        Observed BSR
+                      </span>
+                      <span className="text-base font-bold text-primary">
+                        {marketPosition.myBsrFormatted}
+                      </span>
+                    </div>
+                    {marketPosition.myCategory && (
+                      <div className="border-l border-border pl-3 text-left">
+                        <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                          Category
+                        </span>
+                        <span className="text-xs font-semibold text-foreground">
+                          {marketPosition.myCategory}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {myProduct.amazonBsr?.subcategories && myProduct.amazonBsr.subcategories.length > 0 && (
+                  <div className="mt-2.5 pt-2 border-t border-border/40 flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold">Subcategories:</span>
+                    {myProduct.amazonBsr.subcategories.map((sub: any, sIdx: number) => (
+                      <Badge key={sIdx} variant="outline" className="text-[10px]">
+                        {sub.rankFormatted} in {sub.category}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
+              {/* Competitors Entries */}
+              {(marketPosition.competitorBsrs || []).map((comp: any, idx: number) => (
+                <Card key={idx} className="border-border bg-card p-3.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">
+                          COMPETITOR {idx + 1}
+                        </Badge>
+                        <span className="font-bold text-sm text-foreground">
+                          {comp.name}
+                        </span>
+                        {comp.relativeRank && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Rank #{comp.relativeRank}
+                          </Badge>
+                        )}
+                      </div>
+                      {comp.url && (
+                        <span className="text-[11px] text-muted-foreground block truncate max-w-md">
+                          {comp.url}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3 text-right">
+                      <div>
+                        <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                          Observed BSR
+                        </span>
+                        <span className={`text-base font-bold ${comp.rank !== null ? 'text-foreground' : 'text-muted-foreground'}`}>
+                          {comp.bsrFormatted}
+                        </span>
+                      </div>
+                      {comp.category && (
+                        <div className="border-l border-border pl-3 text-left">
+                          <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                            Category
+                          </span>
+                          <span className="text-xs font-semibold text-foreground">
+                            {comp.category}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {comp.subcategories && comp.subcategories.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-border/40 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground uppercase font-bold">Subcategories:</span>
+                      {comp.subcategories.map((sub: any, sIdx: number) => (
+                        <Badge key={sIdx} variant="outline" className="text-[10px]">
+                          {sub.rankFormatted} in {sub.category}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 sm:p-4 border-t border-border/80 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Data extracted strictly from public Amazon listings. Never converted to units or revenue.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBsrModal(false)}
+                className="text-xs"
+              >
+                Close BSR Details
               </Button>
             </div>
           </div>

@@ -134,7 +134,7 @@ export async function GET(
           price: targetPrice,
           sales: targetSales,
           rating: targetRating,
-          licenseType: mySales ? 'Commercial license' : 'Standard SaaS',
+          licenseType: record.platform === 'amazon' || (myProduct?.url && /amazon\.[a-z.]+/i.test(myProduct.url)) ? 'Current Price' : (mySales ? 'Commercial license' : 'Standard SaaS'),
         },
         competitor: sanitizedCompetitors[0]
           ? {

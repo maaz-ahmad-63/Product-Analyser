@@ -521,6 +521,7 @@ export default function AnalysesIndexPage() {
           initialName={editTarget.name}
           initialProductName={editTarget.ownProduct.name}
           initialModules={editTarget.selectedModules}
+          platform={editTarget.platform}
           onUpdated={(updated) => {
             setAnalyses((prev) =>
               prev.map((a) =>

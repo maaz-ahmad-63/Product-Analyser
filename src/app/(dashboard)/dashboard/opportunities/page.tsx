@@ -432,7 +432,17 @@ export default function OpportunitiesPage() {
                     <Badge variant="outline" className={`text-[9px] font-bold uppercase ${opp.typeInfo.color}`}>
                       {opp.typeInfo.type}
                     </Badge>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {opp.is_shared_market_weakness && (
+                        <Badge variant="outline" className="text-[9px] font-bold border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
+                          Shared Weakness ({opp.shared_competitors_count} rivals)
+                        </Badge>
+                      )}
+                      {opp.highest_sales_competitor_affected && (
+                        <Badge variant="outline" className="text-[9px] font-bold border-amber-500/30 bg-amber-500/10 text-amber-400">
+                          Sales Leader Affected
+                        </Badge>
+                      )}
                       <Badge
                         variant="outline"
                         className={`text-[9px] font-bold ${
@@ -552,6 +562,16 @@ export default function OpportunitiesPage() {
                   >
                     {selectedOpportunity.isHighPriority ? 'HIGH PRIORITY' : 'MEDIUM'}
                   </Badge>
+                  {selectedOpportunity.is_shared_market_weakness && (
+                    <Badge variant="outline" className="text-[9px] font-bold border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
+                      Shared Weakness ({selectedOpportunity.shared_competitors_count} rivals)
+                    </Badge>
+                  )}
+                  {selectedOpportunity.highest_sales_competitor_affected && (
+                    <Badge variant="outline" className="text-[9px] font-bold border-amber-500/30 bg-amber-500/10 text-amber-400">
+                      Sales Leader Affected
+                    </Badge>
+                  )}
                   <Badge variant="outline" className={`text-[9px] font-medium ${selectedOpportunity.evidenceInfo.color}`}>
                     {selectedOpportunity.evidenceInfo.label}
                   </Badge>

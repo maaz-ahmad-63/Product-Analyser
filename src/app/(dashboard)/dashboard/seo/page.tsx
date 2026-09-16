@@ -375,7 +375,8 @@ export default function SeoPage() {
         locationOnPage: loc,
         quotedSnippet: obs?.evidenceSnippet || (targetAudit.title?.toLowerCase().includes(lower) ? targetAudit.title : undefined),
         customerMentions: obs?.customerMentions,
-        competitorsCount: inComp ? (obs?.evidenceCount || 1) : 0,
+        competitorNames: obs?.competitorNames || [],
+        competitorsCount: inComp ? (obs?.competitorNames?.length || 1) : 0,
       })
     }
 
@@ -409,7 +410,8 @@ export default function SeoPage() {
           locationOnPage: obs.inMyProduct ? 'Body copy' : 'Missing from landing page',
           quotedSnippet: obs.evidenceSnippet,
           customerMentions: obs.customerMentions,
-          competitorsCount: obs.inCompetitors ? (obs.evidenceCount || 1) : 0,
+          competitorsCount: obs.inCompetitors ? (obs.competitorNames?.length || 1) : 0,
+          competitorNames: obs.competitorNames || [],
         })
       }
     }
@@ -2061,7 +2063,9 @@ export default function SeoPage() {
                         </span>
                         <span>
                           {t.competitorsCount && t.competitorsCount > 0
-                            ? `Captured by ${t.competitorsCount} rival${t.competitorsCount > 1 ? 's' : ''}`
+                            ? competitorsData.length > 0
+                              ? `${t.competitorsCount}/${competitorsData.length} competitors cover this topic`
+                              : `Captured by ${t.competitorsCount} rival${t.competitorsCount > 1 ? 's' : ''}`
                             : 'Unique to your product'}
                         </span>
                       </div>

@@ -2,6 +2,8 @@
 // FEATURE BATTLE — Product Competitive Feature Matrix & Intelligence Engine
 // Grounded in real DOM scraped features, review comments, and customer demand signals.
 
+import { ProductAttributeRow, ProductAttributeSignals } from './types'
+
 export type FeatureBattleCategory =
   | 'Core Features'
   | 'Integrations'
@@ -115,6 +117,7 @@ export interface FeatureBattleResult {
   matrix: FeatureBattleRow[]
   categories: Array<{ name: FeatureBattleCategory; count: number }>
   totalMarketFeatures: number
+  attributeSignals?: ProductAttributeSignals
 }
 
 // Backwards compatibility types for components that import these
@@ -240,7 +243,7 @@ export function mapToBattleCategory(text: string): FeatureBattleCategory {
   if (/\b(security|ssl|verify|verification|document|kyc|encrypt|token|otp|protect|audit|sos)\b/.test(l)) {
     return 'Security'
   }
-  if (/\b(support|doc|documentation|ticket|chat|help|faq|guide|manual|24\/7|voice|contact)\b/.test(l)) {
+  if (/\b(support|doc|documentation|ticket|chat|help|faq|guide|manual|24\/7|voice|contact|warranty|guarantee|installation|authorized partner|authorized service|service partner|service network|return policy)\b/.test(l)) {
     return 'Support'
   }
   if (/\b(price|pricing|tier|plan|license|subscription|billing|checkout|payment|cost|discount|wallet|fare|invoice)\b/.test(l)) {
@@ -574,6 +577,19 @@ export function buildFeatureBattle(
       tableStakesList.push(featName)
     }
 
+    // Detect if sales leader offers this feature
+    let salesLeader: any = null
+    let maxCompSales = -1
+    for (const c of validCompetitors) {
+      const s = c.raw?.envatoSales?.current_total_sales ?? 0
+      if (s > maxCompSales) {
+        maxCompSales = s
+        salesLeader = c
+      }
+    }
+    const isLeaderOffering = salesLeader && offeringCompetitors.includes(salesLeader.name)
+    const leaderNote = isLeaderOffering ? ` (including sales leader ${salesLeader.name})` : ''
+
     if (targetSupport.depth === 'Unknown') {
       classification = 'unknown'
       unknownList.push(featName)
@@ -583,7 +599,7 @@ export function buildFeatureBattle(
       classification = 'advantage'
       featuresYouLead.push(featName)
       isGenuineDifferentiator = true
-      conclusion = `Your product maintains an exclusive lead in ${featName}. No monitored rivals demonstrate verified public support.`
+      conclusion = `Exclusive capability: 0/${validCompetitors.length} competitors offer this (${myProduct?.productName || myProduct?.websiteTitle || 'Your product'} exclusive lead).`
 
       myProductAdvantages.push({
         feature: featName,
@@ -599,10 +615,11 @@ export function buildFeatureBattle(
       // Competitor lead / Gap
       classification = 'gap'
       featuresCompetitorsLead.push(featName)
+      const ratioStr = `${offeringCompetitors.length}/${validCompetitors.length} competitors have this feature${leaderNote}`
 
       if (customerImportance.importanceScore === 'HIGH' || customerImportance.requestMentions >= 1 || customerImportance.customerMentions >= 4) {
         isHighValueGap = true
-        conclusion = `${offeringCompetitors.join(', ')} provide verified support while your product lacks it. High customer demand (${customerImportance.customerMentions} mentions, ${customerImportance.requestMentions} feature requests) makes this a high-priority gap.`
+        conclusion = `${ratioStr} (${offeringCompetitors.join(', ')}). Your product lacks this capability, while active customer demand (${customerImportance.customerMentions} mentions, ${customerImportance.requestMentions} feature requests) makes this a high-priority gap.`
 
         highValueGaps.push({
           feature: featName,
@@ -618,7 +635,7 @@ export function buildFeatureBattle(
         })
       } else {
         isLowValueGap = true
-        conclusion = `${offeringCompetitors.join(', ')} advertise ${featName}, but customer discussion volume is low (${customerImportance.customerMentions} mentions). Low immediate risk gap.`
+        conclusion = `${ratioStr} (${offeringCompetitors.join(', ')}). Your product lacks this capability, but customer discussion volume is low (${customerImportance.customerMentions} mentions). Low immediate risk gap.`
 
         lowValueGaps.push({
           feature: featName,
@@ -632,7 +649,7 @@ export function buildFeatureBattle(
       // Both have it
       classification = 'parity'
       parity.push(featName)
-      conclusion = `Shared industry standard: supported by both your product and ${offeringCompetitors.length} competitor(s).`
+      conclusion = `${offeringCompetitors.length}/${validCompetitors.length} competitors have this feature${leaderNote} (${offeringCompetitors.join(', ')}). Supported by both your product and rivals as baseline market capability.`
     }
 
     matrix.push({
@@ -710,11 +727,179 @@ export function buildFeatureBattle(
     },
   }
 
+  // Phase 1: Amazon Product Attributes Intelligence across ALL competitors
+  const attributeSignals = buildProductAttributeSignals(myProduct, validCompetitors)
+
   return {
     summary,
     matrix,
     categories,
     totalMarketFeatures: matrix.length,
+    attributeSignals,
+  }
+}
+
+/**
+ * Builds deterministic Product Attribute comparison across My Product and ALL competitors.
+ * Grounded strictly in real scraped specs table and detail bullets from public pages.
+ * Missing attribute = "Not available", never zero.
+ */
+export function buildProductAttributeSignals(
+  myProduct: any,
+  validCompetitors: Array<{ name: string; raw: any }>
+): ProductAttributeSignals | undefined {
+  const mySpecs: Record<string, string> = myProduct?.specs || {}
+  const compSpecsList = (validCompetitors || []).map((c) => ({
+    name: c.name,
+    specs: (c.raw?.specs || {}) as Record<string, string>,
+  }))
+
+  const attributeKeysMap = new Map<string, string>()
+
+  const registerKey = (key: string) => {
+    if (!key) return
+    const trimmed = key.trim()
+    if (trimmed.length < 2 || trimmed.length > 50) return
+    const lower = trimmed.toLowerCase()
+    if (
+      lower === 'tags' ||
+      lower === 'breadcrumbs' ||
+      lower === 'comments' ||
+      lower.includes('best sellers rank') ||
+      lower.includes('customer reviews') ||
+      lower.includes('rating')
+    ) {
+      return
+    }
+    if (!attributeKeysMap.has(lower)) {
+      attributeKeysMap.set(lower, trimmed)
+    }
+  }
+
+  Object.keys(mySpecs).forEach(registerKey)
+  compSpecsList.forEach((c) => {
+    Object.keys(c.specs).forEach(registerKey)
+  })
+
+  if (attributeKeysMap.size === 0) {
+    return undefined
+  }
+
+  const matrix: ProductAttributeRow[] = []
+  let myObservedCount = 0
+  let competitorGapsCount = 0
+  const totalCompetitorsCount = validCompetitors.length
+
+  for (const [lowerKey, canonicalName] of Array.from(attributeKeysMap.entries())) {
+    let myVal = 'Not available'
+    for (const [k, v] of Object.entries(mySpecs)) {
+      if (k.toLowerCase() === lowerKey && v && String(v).trim()) {
+        myVal = String(v).trim()
+        break
+      }
+    }
+
+    if (myVal !== 'Not available') {
+      myObservedCount++
+    }
+
+    const competitorVals: Record<string, string> = {}
+    let competitorsWithAttr = 0
+
+    for (const comp of compSpecsList) {
+      let compVal = 'Not available'
+      for (const [k, v] of Object.entries(comp.specs)) {
+        if (k.toLowerCase() === lowerKey && v && String(v).trim()) {
+          compVal = String(v).trim()
+          break
+        }
+      }
+      competitorVals[comp.name] = compVal
+      if (compVal !== 'Not available') {
+        competitorsWithAttr++
+      }
+    }
+
+    const penetrationRatio = totalCompetitorsCount > 0 ? `${competitorsWithAttr}/${totalCompetitorsCount}` : '0/0'
+
+    const isServiceClaim = /\b(warranty|guarantee|partner|authorized|service|support|installation|network|repair|maintenance|return|policy|customer service)\b/i.test(canonicalName)
+    const kind: ProductAttributeRow['kind'] = isServiceClaim ? 'service_claim' : 'specification'
+
+    let status: ProductAttributeRow['status'] = 'shared'
+    let conclusion = ''
+
+    if (myVal !== 'Not available' && competitorsWithAttr === 0) {
+      status = 'advantage'
+      conclusion = `Your product specifies ${canonicalName} (${myVal}), while 0/${totalCompetitorsCount} competitors specify this attribute.`
+    } else if (myVal === 'Not available' && competitorsWithAttr > 0) {
+      status = 'gap'
+      if (kind === 'specification') {
+        competitorGapsCount++
+      }
+      conclusion = `${competitorsWithAttr}/${totalCompetitorsCount} competitors specify ${canonicalName}. Not observed on your product public page.`
+    } else if (myVal !== 'Not available' && competitorsWithAttr > 0) {
+      const anyDiff = Object.values(competitorVals).some(
+        (cv) => cv !== 'Not available' && cv.toLowerCase() !== myVal.toLowerCase()
+      )
+      status = anyDiff ? 'different' : 'shared'
+      conclusion = `${competitorsWithAttr}/${totalCompetitorsCount} competitors specify ${canonicalName}.`
+    } else {
+      status = 'shared'
+      conclusion = `Not observed on public pages.`
+    }
+
+    matrix.push({
+      name: canonicalName,
+      myValue: myVal,
+      competitors: competitorVals,
+      competitorsWithAttributeCount: competitorsWithAttr,
+      totalCompetitorsCount,
+      penetrationRatio,
+      status,
+      conclusion,
+      kind,
+    })
+  }
+
+  // Sort matrix: Gaps first, then differences, then advantages, then shared
+  matrix.sort((a, b) => {
+    if (a.status === 'gap' && b.status !== 'gap') return -1
+    if (b.status === 'gap' && a.status !== 'gap') return 1
+    return b.competitorsWithAttributeCount - a.competitorsWithAttributeCount
+  })
+
+  const totalObservedAttributes = matrix.length
+  const isComparable = myObservedCount > 0
+  const attributeCoveragePercentage = isComparable && totalObservedAttributes > 0
+    ? Math.round((myObservedCount / totalObservedAttributes) * 100)
+    : null
+
+  let whatWeFound = ''
+  if (!isComparable) {
+    whatWeFound = 'Comparable public specifications were not observed on your listing.'
+  } else if (totalCompetitorsCount > 0) {
+    const topGap = matrix.find((m) => m.status === 'gap' && m.kind === 'specification') || matrix.find((m) => m.status === 'gap')
+    if (topGap && topGap.competitorsWithAttributeCount > 0) {
+      whatWeFound = `${topGap.competitorsWithAttributeCount} of ${totalCompetitorsCount} competitors share attributes that are not currently observed on your product.`
+    } else if (competitorGapsCount > 0) {
+      whatWeFound = `Competitors specify ${competitorGapsCount} technical product attributes not currently observed on your product.`
+    } else if (attributeCoveragePercentage !== null && attributeCoveragePercentage >= 80) {
+      whatWeFound = `Your product has high attribute coverage (${attributeCoveragePercentage}%), matching or exceeding monitored competitor specifications.`
+    } else {
+      whatWeFound = `Cataloged ${totalObservedAttributes} observed specifications across ${totalCompetitorsCount} competitors.`
+    }
+  } else {
+    whatWeFound = `Cataloged ${totalObservedAttributes} product specifications from public listing.`
+  }
+
+  return {
+    attributeCoveragePercentage,
+    totalObservedAttributes,
+    myObservedCount,
+    competitorGapsCount,
+    whatWeFound,
+    matrix,
+    isComparable,
   }
 }
 

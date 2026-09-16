@@ -290,8 +290,52 @@ async def scrape(url: str):
                 document.querySelectorAll('#productOverview_feature_div table tr, #techSpecsMeasure table tr, #technicalSpecifications_section_1 tr').forEach(tr => {
                     const name = tr.querySelector('td:first-child, th')?.innerText?.trim();
                     const val = tr.querySelector('td:last-child, td')?.innerText?.trim();
-                    if (name && val && name !== val && name.length < 50) {
-                        specs[name] = val;
+                    if (name && val && name !== val && name.length < 60 && val.length < 300) {
+                        if (!name.includes('Customer Reviews') && !name.includes('Best Sellers Rank') && !name.includes('BSR')) {
+                            specs[name] = val;
+                        }
+                    }
+                });
+
+                // Amazon Product Overview .po-row (div structure)
+                document.querySelectorAll('#productOverview_feature_div .po-row').forEach(row => {
+                    const name = row.querySelector('.po-title, td:first-child, span:first-child')?.innerText?.trim();
+                    const val = row.querySelector('.po-value, td:last-child, span.po-break-word, span:last-child')?.innerText?.trim();
+                    if (name && val && name !== val && name.length < 60 && val.length < 300) {
+                        if (!name.includes('Customer Reviews') && !name.includes('Best Sellers Rank') && !name.includes('BSR')) {
+                            specs[name] = val;
+                        }
+                    }
+                });
+
+                // Amazon Detail Bullets (e.g. Dimensions, Weight, Material, Date First Available)
+                document.querySelectorAll('#detailBullets_feature_div ul li, #detailBulletsWrapper_feature_div ul li').forEach(li => {
+                    const boldEl = li.querySelector('.a-text-bold, span:first-child');
+                    if (boldEl) {
+                        const rawName = boldEl.innerText.replace(/[:\u200E\u200F]/g, '').trim();
+                        const fullText = li.innerText || '';
+                        let val = fullText.replace(boldEl.innerText, '').replace(/[:\u200E\u200F]/g, '').trim();
+                        if (val.includes('\n')) val = val.split('\n')[0].trim();
+                        if (rawName && val && rawName.length < 60 && val.length < 300) {
+                            if (!rawName.includes('Customer Reviews') && !rawName.includes('Best Sellers Rank') && !rawName.includes('BSR')) {
+                                if (!specs[rawName]) {
+                                    specs[rawName] = val;
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Amazon Product Details table (Item Weight, Dimensions, Manufacturer, etc.)
+                document.querySelectorAll('#prodDetails table tr, #productDetails_db_sections tr, table.prodDetTable tr').forEach(tr => {
+                    const name = tr.querySelector('th, td:first-child')?.innerText?.replace(/[:\u200E\u200F]/g, '')?.trim();
+                    const val = tr.querySelector('td:last-child, td')?.innerText?.trim();
+                    if (name && val && name !== val && name.length < 60 && val.length < 300) {
+                        if (!name.includes('Customer Reviews') && !name.includes('Best Sellers Rank') && !name.includes('BSR')) {
+                            if (!specs[name]) {
+                                specs[name] = val;
+                            }
+                        }
                     }
                 });
                 
@@ -334,6 +378,76 @@ async def scrape(url: str):
                 if (socialProofEl) {
                     salesVelocityText = socialProofEl.innerText.trim();
                 }
+
+                // 9b. Amazon Best Sellers Rank (BSR) and Category extraction
+                let amazonBsr = null;
+                try {
+                    let rawBsrText = null;
+                    const salesRankEl = document.querySelector('#SalesRank');
+                    if (salesRankEl) {
+                        rawBsrText = salesRankEl.innerText || '';
+                    }
+
+                    if (!rawBsrText) {
+                        const bulletItems = document.querySelectorAll('#detailBullets_feature_div li, #detailBulletsWrapper_feature_div li');
+                        for (const li of bulletItems) {
+                            const txt = li.innerText || '';
+                            if (txt.includes('Best Sellers Rank') || txt.includes('BSR')) {
+                                rawBsrText = txt;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!rawBsrText) {
+                        const rows = document.querySelectorAll('#prodDetails tr, #productDetails_db_sections tr, table.prodDetTable tr');
+                        for (const tr of rows) {
+                            const th = tr.querySelector('th, td:first-child')?.innerText || '';
+                            if (th.includes('Best Sellers Rank') || th.includes('BSR')) {
+                                rawBsrText = tr.querySelector('td:last-child, td')?.innerText || '';
+                                break;
+                            }
+                        }
+                    }
+
+                    if (rawBsrText) {
+                        const mainMatch = rawBsrText.match(/#?\s*([0-9,]+)\s+in\s+([^(\n<]+)/i);
+                        if (mainMatch) {
+                            const rankNum = parseInt(mainMatch[1].replace(/,/g, ''), 10);
+                            let cat = mainMatch[2].replace(/See Top 100 in/i, '').replace(/See Top 100/i, '').trim();
+                            cat = cat.replace(/^[-\s]+|[-\s]+$/g, '');
+
+                            const subcategories = [];
+                            const subMatches = rawBsrText.matchAll(/#?\s*([0-9,]+)\s+in\s+([^\n<(]+)/gi);
+                            let isFirst = true;
+                            for (const sm of subMatches) {
+                                if (isFirst) {
+                                    isFirst = false;
+                                    continue;
+                                }
+                                const subRank = parseInt(sm[1].replace(/,/g, ''), 10);
+                                const subCat = sm[2].replace(/See Top 100 in/i, '').replace(/See Top 100/i, '').trim().replace(/^[-\s]+|[-\s]+$/g, '');
+                                if (subRank && subCat && subCat !== cat && subcategories.length < 5) {
+                                    subcategories.push({
+                                        rank: subRank,
+                                        rankFormatted: `#${subRank.toLocaleString()}`,
+                                        category: subCat
+                                    });
+                                }
+                            }
+
+                            if (!isNaN(rankNum) && cat) {
+                                amazonBsr = {
+                                    rank: rankNum,
+                                    rankFormatted: `#${rankNum.toLocaleString()}`,
+                                    category: cat,
+                                    subcategories: subcategories,
+                                    rawText: `#${rankNum.toLocaleString()} in ${cat}`
+                                };
+                            }
+                        }
+                    }
+                } catch (e) {}
 
                 // 10. Tags & Breadcrumbs
                 let tags = [];
@@ -431,6 +545,7 @@ async def scrape(url: str):
                     thumbnailUrl,
                     imageAltsCount,
                     comments,
+                    amazonBsr,
                     features: features.slice(0, 35)
                 };
             }''');
@@ -449,6 +564,7 @@ async def scrape(url: str):
             result["thumbnailUrl"] = extracted.get("thumbnailUrl")
             result["imageAltsCount"] = extracted.get("imageAltsCount", 0)
             result["comments"] = extracted.get("comments", [])
+            result["amazonBsr"] = extracted.get("amazonBsr")
             
             # Platform Detection
             is_amazon = "amazon." in url
@@ -509,9 +625,11 @@ async def scrape(url: str):
             discounted_price = extracted.get("strikethroughPrice")
             total_sales = None
             
+            amazon_purchase_badge = None
             # Amazon Sales Velocity (e.g. "200+ bought in past month")
             if is_amazon and extracted.get("salesVelocityText"):
                 v_text = extracted["salesVelocityText"]
+                amazon_purchase_badge = v_text.strip()
                 m = re.search(r'([0-9,]+K?)\+?\s+bought', v_text, re.IGNORECASE)
                 if m:
                     raw_num = m.group(1).upper()
@@ -525,6 +643,8 @@ async def scrape(url: str):
                             total_sales = int(raw_num.replace(',', ''))
                         except:
                             total_sales = None
+
+            result["amazonPurchaseBadge"] = amazon_purchase_badge
 
             # Envato Sales Count
             if is_envato:
@@ -567,39 +687,65 @@ async def scrape(url: str):
                 "thumbnail_url": result["thumbnailUrl"]
             }
 
-            # Attempt to scrape /comments tab on Envato if not already populated
-            if is_envato and len(result["comments"]) == 0 and ("codecanyon.net/item/" in url or "themeforest.net/item/" in url):
+            # Scrape /comments tab on Envato to get full discussions & accurate total comment count
+            if is_envato and ("codecanyon.net/item/" in url or "themeforest.net/item/" in url):
                 try:
                     clean_url = url.split("?")[0].rstrip("/")
-                    if not clean_url.endswith("/comments"):
-                        comments_url = f"{clean_url}/comments"
-                        comments_page = await context.new_page()
-                        await Stealth().apply_stealth_async(comments_page)
-                        await comments_page.goto(comments_url, wait_until='domcontentloaded', timeout=18000)
+                    clean_url = re.sub(r'/(comments|reviews|support)$', '', clean_url)
+                    comments_url = f"{clean_url}/comments"
+                    comments_page = await context.new_page()
+                    await Stealth().apply_stealth_async(comments_page)
+                    await comments_page.goto(comments_url, wait_until='domcontentloaded', timeout=20000)
+                    await comments_page.wait_for_timeout(1000)
+                    
+                    comments_data = await comments_page.evaluate('''() => {
+                        const list = [];
+                        let totalCount = null;
                         
-                        comments_data = await comments_page.evaluate('''() => {
-                            const list = [];
-                            document.querySelectorAll('.comment__item, .js-comment, [class*="comment__item"], .comment, [class*="comment-item"], article.comment').forEach((c, idx) => {
-                                if (idx >= 40) return;
-                                const author = c.querySelector('a[href^="/user/"], .comment__author, [class*="author"], a.user-info')?.innerText?.trim() || 'Customer';
-                                const text = c.querySelector('.comment__body, .js-comment__body, .t-preformatted, .comment__content, [class*="comment_body"], .user-html')?.innerText?.trim() || '';
-                                const date = c.querySelector('.comment__date, time, [class*="date"]')?.innerText?.trim() || 'Recently';
-                                if (text.length > 10) {
-                                    list.push({
-                                        author_name: author,
-                                        comment_text: text.slice(0, 1000),
-                                        comment_date: date,
-                                        comment_url: null,
-                                        rating: null
-                                    });
-                                }
-                            });
-                            return list;
-                        }''')
-                        if comments_data and len(comments_data) > 0:
-                            result["comments"] = comments_data
-                            result["envatoSales"]["comment_count"] = len(comments_data)
-                        await comments_page.close()
+                        // Extract total comments count from tab badge or heading
+                        const links = Array.from(document.querySelectorAll('a[href*="/comments"], .item-navigation a, [data-view="commentsCount"]'));
+                        for (const l of links) {
+                            const t = l.innerText || '';
+                            const m = t.match(/comments?\s*\(?([0-9,]+)\)?/i) || t.match(/\(?([0-9,]+)\)?\s*comments?/i);
+                            if (m) {
+                                totalCount = parseInt(m[1].replace(/,/g, ''), 10);
+                                break;
+                            }
+                        }
+                        if (!totalCount) {
+                            const heading = document.querySelector('h1, h2, .page-title, .item-header')?.innerText || '';
+                            const m = heading.match(/([0-9,]+)\s+comments?/i);
+                            if (m) totalCount = parseInt(m[1].replace(/,/g, ''), 10);
+                        }
+                        
+                        document.querySelectorAll('.comment__item, .js-comment, [class*="comment__item"], .comment, [class*="comment-item"], article.comment').forEach((c, idx) => {
+                            if (idx >= 80) return;
+                            const author = c.querySelector('a[href^="/user/"], .comment__author, [class*="author"], a.user-info')?.innerText?.trim() || 'Customer';
+                            const text = c.querySelector('.comment__body, .js-comment__body, .t-preformatted, .comment__content, [class*="comment_body"], .user-html')?.innerText?.trim() || '';
+                            const date = c.querySelector('.comment__date, time, [class*="date"]')?.innerText?.trim() || 'Recently';
+                            const commentUrl = c.querySelector('a.comment__date, a[href*="#comment"], a[href*="/comments/"]')?.href || null;
+                            if (text.length > 10) {
+                                list.push({
+                                    author_name: author,
+                                    comment_text: text.slice(0, 1000),
+                                    comment_date: date,
+                                    comment_url: commentUrl,
+                                    rating: null
+                                });
+                            }
+                        });
+                        return { list, totalCount };
+                    }''')
+                    
+                    if comments_data:
+                        if comments_data.get("list") and len(comments_data["list"]) > 0:
+                            result["comments"] = comments_data["list"]
+                        if comments_data.get("totalCount"):
+                            result["envatoSales"]["comment_count"] = comments_data["totalCount"]
+                        elif len(result["comments"]) > 0 and result["envatoSales"]["comment_count"] is None:
+                            result["envatoSales"]["comment_count"] = len(result["comments"])
+                            
+                    await comments_page.close()
                 except Exception:
                     pass
             

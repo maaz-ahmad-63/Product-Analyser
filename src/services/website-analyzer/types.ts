@@ -43,6 +43,79 @@ export interface DataProvenance {
   message?: string
 }
 
+export interface AmazonBsrData {
+  rank: number | null
+  rankFormatted: string
+  category: string | null
+  subcategories?: Array<{
+    rank: number
+    rankFormatted: string
+    category: string
+  }>
+  rawText?: string | null
+  observedAt?: string
+}
+
+export interface ProductAttributeRow {
+  name: string
+  myValue: string
+  competitors: Record<string, string>
+  competitorsWithAttributeCount: number
+  totalCompetitorsCount: number
+  penetrationRatio: string
+  status: 'shared' | 'advantage' | 'gap' | 'different'
+  conclusion: string
+  kind?: 'specification' | 'service_claim'
+}
+
+export interface ProductAttributeSignals {
+  attributeCoveragePercentage: number | null
+  totalObservedAttributes: number
+  myObservedCount: number
+  competitorGapsCount: number
+  whatWeFound: string
+  matrix: ProductAttributeRow[]
+  isComparable: boolean
+}
+
+export interface MarketPositionCompetitorItem {
+  name: string
+  url: string
+  bsrFormatted: string
+  rank: number | null
+  category: string | null
+  subcategories?: Array<{
+    rank: number
+    rankFormatted: string
+    category: string
+  }>
+  relativeRank?: number
+  historicalChange?: string
+}
+
+export interface MarketPositionComparison {
+  myBsrFormatted: string
+  myRank: number | null
+  myCategory: string | null
+  marketRange: string
+  competitorBsrRange?: string
+  lowestRank: number | null
+  highestRank: number | null
+  strongestCompetitor: {
+    name: string
+    bsrFormatted: string
+    category: string | null
+  } | null
+  bestObservedCompetitor?: {
+    name: string
+    bsrFormatted: string
+    category: string | null
+  } | null
+  relativePositionText: string
+  competitorBsrs: MarketPositionCompetitorItem[]
+  historicalObservationsNote: string
+}
+
 export interface ExtractedProductData {
   url: string
   normalizedUrl: string
@@ -70,6 +143,9 @@ export interface ExtractedProductData {
   collectionErrors: string[]
   analyzedAt: string
   envatoSales?: EnvatoSalesData | null
+  amazonBsr?: AmazonBsrData | null
+  amazonPurchaseBadge?: string | null
+  specs?: Record<string, string>
   thumbnailUrl?: string | null
   headings?: { h1: string[]; h2: string[]; h3: string[] }
   tags?: string[]
@@ -124,6 +200,30 @@ export interface ProductComparison {
   pricingAdvantages: string[]
   improvementAreas: string[]
   importantRisks: string[]
+  byCompetitor?: Record<string, ProductComparison>
+  marketOverview?: {
+    totalCompetitors: number
+    highestSalesCompetitor?: {
+      name: string
+      sales: number
+      price?: string
+      rating?: number
+    }
+    sharedWeaknesses?: Array<{
+      weakness: string
+      affectedCompetitors: string[]
+      count: number
+      sampleComment?: string
+    }>
+    featurePenetration?: Array<{
+      feature: string
+      count: number
+      total: number
+      percentage: number
+      competitors: string[]
+    }>
+  }
+  marketPosition?: MarketPositionComparison | null
 }
 
 export interface RuleRecommendation {
@@ -381,6 +481,10 @@ export interface ObservedTopic {
   competitorNames: string[]
   evidenceSnippet?: string
   customerMentions?: number
+  competitorCoverageRatio?: string
+  totalCompetitorsCount?: number
+  isUniversalCoverage?: boolean
+  coveredByHighestSalesCompetitor?: boolean
 }
 
 export interface CompetitorTopicGap {
@@ -603,6 +707,7 @@ export interface CommentsAnalysisResult {
   unavailable_competitors: string[]
   sales_comment_correlation?: SalesCommentCorrelation | null
   all_comments?: PublicComment[]
+  filtered_complaints?: PublicComment[]
   positive_count?: number
   negative_count?: number
   neutral_count?: number
@@ -653,6 +758,10 @@ export interface OpportunityRecord {
   suggestedOutreach?: string
   opportunityScore?: number
   targetCompetitor?: string
+  shared_competitors_count?: number
+  shared_competitors?: string[]
+  is_shared_market_weakness?: boolean
+  highest_sales_competitor_affected?: boolean
 }
 
 export interface CompetitorInsightItem {

@@ -675,7 +675,8 @@ export async function analyzeCompetitorComments(
   return {
     summaries,
     recurring_complaints: recurringComplaints,
-    comments: allFilteredComments,
+    comments: allProcessedComments,
+    filtered_complaints: allFilteredComments,
     all_comments: allProcessedComments,
     total_analyzed: totalAnalyzed,
     unresolved_count: unresolvedCount,

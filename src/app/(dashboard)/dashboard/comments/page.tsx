@@ -127,80 +127,328 @@ export default function CommentsPage() {
       }
     })
   }, [rawClusters])
+  // Normalization helpers
+  const normalizeUrl = (u?: string) => {
+    if (!u) return ''
+    try {
+      const withoutQuery = u.split('?')[0].split('#')[0]
+      return withoutQuery.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '')
+    } catch {
+      return (u || '').trim().toLowerCase()
+    }
+  }
+
+  const getAsin = (u?: string) => {
+    if (!u) return null
+    const m = u.match(/(?:\/dp\/|\/product\/|\/gp\/product\/)([a-z0-9]{10})/i)
+    return m ? m[1].toUpperCase() : null
+  }
 
   // Extract own product name & competitor list
   const ownProductName = currentProjectMeta?.ownProduct?.name || currentProjectData?.my_product?.productName || 'Your Product'
-  const competitorsData: any[] = currentProjectData?.competitors_data || []
-  const myUrl = currentProjectData?.my_url || currentProjectMeta?.ownProduct?.url || ''
+  const myUrl = currentProjectData?.my_url || currentProjectMeta?.ownProduct?.url || currentProjectData?.my_product?.url || ''
+  const normMyUrl = normalizeUrl(myUrl)
+  const myAsin = getAsin(myUrl)
 
   // Helper to identify own product
-  const isOwnProduct = (pName: string, pUrl?: string) => {
-    const p = (pName || '').toLowerCase()
-    if (myUrl && pUrl && (pUrl === myUrl || myUrl.includes(pUrl) || pUrl.includes(myUrl))) return true
+  const isOwnProduct = (pName?: string, pUrl?: string) => {
+    const normPUrl = normalizeUrl(pUrl)
+    if (normMyUrl && normPUrl) {
+      if (normMyUrl === normPUrl || normMyUrl.includes(normPUrl) || normPUrl.includes(normMyUrl)) return true
+      if (myAsin && getAsin(normPUrl) === myAsin) return true
+    }
+    const p = (pName || '').toLowerCase().trim()
+    if (!p) return false
     if (p.includes('rideon')) return true
-    if (ownProductName && ownProductName !== 'Your Product' && p.includes(ownProductName.toLowerCase())) return true
+    if (ownProductName && ownProductName.toLowerCase() !== 'your product') {
+      const ownLower = ownProductName.toLowerCase().trim()
+      if (p === ownLower || p.includes(ownLower) || ownLower.includes(p)) return true
+    }
     return false
   }
 
+  const summaries: any[] = commentsAnalysis.summaries || commentsAnalysis.competitor_summaries || []
+  const totalAnalyzed = commentsAnalysis.total_analyzed || allComments.length
+
+  // Unified Competitors Resolution across all project sources
+  const unifiedCompetitors = useMemo(() => {
+    const rawList: any[] = []
+
+    // 1. competitors_data from analysis
+    const rawCompetitors: any[] = Array.isArray(currentProjectData?.competitors_data)
+      ? currentProjectData.competitors_data
+      : []
+    rawCompetitors.forEach((c) => {
+      if (c && !isOwnProduct(c.productName || c.websiteTitle || c.title || c.name, c.url)) {
+        rawList.push({ ...c, _source: 'competitors_data' })
+      }
+    })
+
+    // 2. multi_sales_comparison competitor_rows
+    const compRows: any[] = Array.isArray(currentProjectData?.multi_sales_comparison?.competitor_rows)
+      ? currentProjectData.multi_sales_comparison.competitor_rows
+      : []
+    compRows.forEach((r) => {
+      if (r && !isOwnProduct(r.productName || r.name, r.url)) {
+        rawList.push({
+          ...r,
+          productName: r.productName || r.name,
+          _source: 'competitor_rows',
+        })
+      }
+    })
+
+    // 3. metadata competitors (from project creation or added competitors)
+    const metaCompetitors: any[] = Array.isArray(currentProjectMeta?.competitors)
+      ? currentProjectMeta.competitors
+      : []
+    metaCompetitors.forEach((m) => {
+      const mUrl = typeof m === 'string' ? m : m?.url
+      const mName = typeof m === 'string' ? '' : m?.name
+      if (mUrl && !isOwnProduct(mName, mUrl)) {
+        rawList.push({
+          url: mUrl,
+          productName: mName,
+          name: mName,
+          _source: 'meta_competitors',
+        })
+      }
+    })
+
+    // 4. legacy single competitor_product
+    const legacyComp = currentProjectData?.competitor_product
+    if (legacyComp && !isOwnProduct(legacyComp.productName || legacyComp.websiteTitle || legacyComp.name, legacyComp.url)) {
+      rawList.push({ ...legacyComp, _source: 'legacy_competitor' })
+    }
+
+    // 5. summaries from comments_analysis
+    summaries.forEach((s) => {
+      if (s && !isOwnProduct(s.product_name, s.product_url)) {
+        rawList.push({
+          url: s.product_url,
+          productName: s.product_name,
+          name: s.product_name,
+          total_comments: s.total_comments,
+          _source: 'comments_summaries',
+        })
+      }
+    })
+
+    // 6. allComments distinct products
+    allComments.forEach((c) => {
+      if (c && !isOwnProduct(c.product_name, c.product_url)) {
+        if (c.product_name || c.product_url) {
+          rawList.push({
+            url: c.product_url,
+            productName: c.product_name,
+            name: c.product_name,
+            _source: 'all_comments',
+          })
+        }
+      }
+    })
+
+    // 7. Deduplicate & Merge into unified list
+    const merged: any[] = []
+
+    for (const item of rawList) {
+      const itemUrlNorm = normalizeUrl(item.url)
+      const itemAsin = item.url ? getAsin(item.url) : null
+      const itemName = (item.productName || item.name || item.websiteTitle || item.title || '').trim()
+      const itemLower = itemName.toLowerCase()
+
+      const existingIndex = merged.findIndex((existing) => {
+        const existingUrlNorm = normalizeUrl(existing.url)
+        const existingAsin = existing.url ? getAsin(existing.url) : null
+        const existingName = (existing.productName || existing.name || existing.websiteTitle || existing.title || '').trim()
+        const existingLower = existingName.toLowerCase()
+
+        if (itemUrlNorm && existingUrlNorm) {
+          if (itemUrlNorm === existingUrlNorm) return true
+          if (itemAsin && existingAsin && itemAsin === existingAsin) return true
+        }
+
+        if (itemLower && existingLower) {
+          if (itemLower === existingLower) return true
+          if (itemLower.length >= 10 && existingLower.length >= 10) {
+            if (itemLower.startsWith(existingLower.slice(0, 15)) || existingLower.startsWith(itemLower.slice(0, 15))) {
+              return true
+            }
+          }
+        }
+
+        return false
+      })
+
+      if (existingIndex >= 0) {
+        const prev = merged[existingIndex]
+        merged[existingIndex] = {
+          ...item,
+          ...prev,
+          productName: prev.productName || item.productName || item.name || prev.name,
+          name: prev.name || item.name || prev.productName || item.productName,
+          url: prev.url || item.url,
+          rating: prev.rating ?? item.rating,
+          reviewCount: prev.reviewCount ?? item.reviewCount,
+          envatoSales: prev.envatoSales || item.envatoSales,
+          salesAnalysis: prev.salesAnalysis || item.salesAnalysis,
+          sales_history: prev.sales_history || item.sales_history,
+          comments: prev.comments?.length ? prev.comments : item.comments,
+          features: prev.features?.length ? prev.features : item.features,
+        }
+      } else {
+        merged.push({ ...item })
+      }
+    }
+
+    const seenIds = new Set<string>()
+
+    return merged.map((c, idx) => {
+      let displayName = (c.productName || c.name || c.websiteTitle || c.title || '').trim()
+      if (!displayName && c.url) {
+        try {
+          const parsed = new URL(c.url.startsWith('http') ? c.url : `https://${c.url}`)
+          const asin = getAsin(c.url)
+          if (asin) {
+            displayName = `Amazon Rival (${asin})`
+          } else {
+            const pathParts = parsed.pathname.split('/').filter(Boolean)
+            if (pathParts.length > 0) {
+              displayName = pathParts[pathParts.length - 1].replace(/[-_]/g, ' ')
+            } else {
+              displayName = parsed.hostname.replace(/^www\./, '')
+            }
+          }
+        } catch {
+          displayName = `Competitor ${idx + 1}`
+        }
+      }
+      if (!displayName) {
+        displayName = `Competitor ${idx + 1}`
+      }
+
+      const shortLabel = displayName.split('–')[0].split('-')[0].split('|')[0].trim() || displayName
+      let stableId = displayName
+      if (seenIds.has(stableId)) {
+        stableId = `${displayName} (${idx + 1})`
+      }
+      seenIds.add(stableId)
+
+      return {
+        ...c,
+        id: stableId,
+        productName: displayName,
+        name: displayName,
+        shortName: shortLabel.length >= 2 ? shortLabel : displayName,
+      }
+    })
+  }, [
+    currentProjectData?.competitors_data,
+    currentProjectData?.multi_sales_comparison?.competitor_rows,
+    currentProjectData?.competitor_product,
+    currentProjectMeta?.competitors,
+    summaries,
+    allComments,
+    myUrl,
+    ownProductName,
+  ])
+
   // Horizontal product tabs (All vs Own Product vs Individual Competitors)
   const productTabs = useMemo(() => {
-    const list: { id: string; label: string; count: number; isOwn: boolean; url?: string }[] = []
+    const list: {
+      id: string
+      label: string
+      count: number
+      totalMarketplace?: number | null
+      isOwn: boolean
+      url?: string
+      competitor?: any
+    }[] = []
 
     // 1. All Market Discussions
+    const totalAllCount = Math.max(allComments.length, totalAnalyzed)
+    const marketplaceSum = summaries.reduce((acc: number, s: any) => acc + (s.total_comments || 0), 0)
     list.push({
       id: 'all',
       label: 'All Market Feedback',
-      count: allComments.length,
+      count: Math.max(totalAllCount, marketplaceSum),
+      totalMarketplace: marketplaceSum > totalAllCount ? marketplaceSum : null,
       isOwn: false,
     })
 
     // 2. Your Product
     const ownComments = allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
-    const ownShort = ownProductName.split('–')[0].split('-')[0].trim()
+    const ownSummary = summaries.find((s) => isOwnProduct(s.product_name, s.product_url))
+    const ownCount = Math.max(ownComments.length, ownSummary?.total_comments || 0)
+    const ownMarketplace = currentProjectData?.my_product?.envatoSales?.comment_count || ownSummary?.total_comments || ownCount
+    const ownShort = ownProductName.split('–')[0].split('-')[0].split('|')[0].trim()
     list.push({
       id: 'own',
       label: `${ownShort} (Your Product)`,
-      count: ownComments.length,
+      count: ownCount,
+      totalMarketplace: ownMarketplace > ownCount ? ownMarketplace : null,
       isOwn: true,
       url: myUrl,
     })
 
-    // 3. Competitors
-    const seenNames = new Set<string>()
-    allComments.forEach((c) => {
-      const p = c.product_name
-      if (p && !isOwnProduct(p, c.product_url) && !seenNames.has(p)) {
-        seenNames.add(p)
-        const count = allComments.filter((cm) => cm.product_name === p).length
-        const shortName = p.split('–')[0].split('-')[0].trim()
-        list.push({
-          id: p,
-          label: shortName || p,
-          count,
-          isOwn: false,
-          url: c.product_url || undefined,
-        })
-      }
-    })
+    // 3. Competitors from unifiedCompetitors
+    unifiedCompetitors.forEach((comp) => {
+      const name = comp.productName || comp.name
+      const shortName = comp.shortName || name
+      const normCompUrl = normalizeUrl(comp.url)
+      const compAsin = comp.url ? getAsin(comp.url) : null
+      const compNameLower = name.toLowerCase()
 
-    competitorsData.forEach((comp) => {
-      const name = comp.productName
-      if (name && !seenNames.has(name) && !isOwnProduct(name, comp.url)) {
-        seenNames.add(name)
-        const count = allComments.filter((cm) => cm.product_name === name || cm.product_url === comp.url).length
-        const shortName = name.split('–')[0].split('-')[0].trim()
-        list.push({
-          id: name,
-          label: shortName || name,
-          count,
-          isOwn: false,
-          url: comp.url || undefined,
-        })
-      }
+      const compComments = allComments.filter((c) => {
+        if (isOwnProduct(c.product_name, c.product_url)) return false
+        if (normCompUrl && c.product_url) {
+          const normCUrl = normalizeUrl(c.product_url)
+          if (normCompUrl === normCUrl || normCompUrl.includes(normCUrl) || normCUrl.includes(normCompUrl)) return true
+          if (compAsin && getAsin(normCUrl) === compAsin) return true
+        }
+        if (c.product_name) {
+          const cNameLower = c.product_name.toLowerCase()
+          if (cNameLower === compNameLower) return true
+          if (cNameLower.length >= 8 && compNameLower.length >= 8) {
+            if (cNameLower.includes(compNameLower.slice(0, 15)) || compNameLower.includes(cNameLower.slice(0, 15))) return true
+          }
+        }
+        return false
+      })
+
+      const compSummary = summaries.find((s: any) => {
+        if (isOwnProduct(s.product_name, s.product_url)) return false
+        if (normCompUrl && s.product_url) {
+          const normSUrl = normalizeUrl(s.product_url)
+          if (normCompUrl === normSUrl || normCompUrl.includes(normSUrl) || normSUrl.includes(normCompUrl)) return true
+          if (compAsin && getAsin(normSUrl) === compAsin) return true
+        }
+        if (s.product_name) {
+          const sNameLower = s.product_name.toLowerCase()
+          if (sNameLower === compNameLower) return true
+          if (sNameLower.length >= 8 && compNameLower.length >= 8) {
+            if (sNameLower.includes(compNameLower.slice(0, 15)) || compNameLower.includes(sNameLower.slice(0, 15))) return true
+          }
+        }
+        return false
+      })
+
+      const count = Math.max(compComments.length, compSummary?.total_comments || 0)
+      const marketplaceCount = comp.envatoSales?.comment_count || compSummary?.total_comments || count
+
+      list.push({
+        id: comp.id || name,
+        label: shortName || name,
+        count,
+        totalMarketplace: marketplaceCount > count ? marketplaceCount : null,
+        isOwn: false,
+        url: comp.url || undefined,
+        competitor: comp,
+      })
     })
 
     return list
-  }, [allComments, ownProductName, competitorsData, currentProjectData, currentProjectMeta])
+  }, [allComments, ownProductName, unifiedCompetitors, currentProjectData, currentProjectMeta, summaries, totalAnalyzed, myUrl])
 
   // Selected Tab Resolution
   const selectedTabObj = useMemo(() => {
@@ -209,29 +457,50 @@ export default function CommentsPage() {
 
   const selectedTabLabel = selectedTabObj?.label || (selectedProductTab === 'all' ? 'All Market Feedback' : selectedProductTab)
 
+  const tabSummary = useMemo(() => {
+    if (selectedProductTab === 'all') return null
+    return summaries.find((s) => {
+      if (selectedProductTab === 'own') return isOwnProduct(s.product_name, s.product_url)
+      if (selectedTabObj?.url && s.product_url) {
+        const sNorm = normalizeUrl(s.product_url)
+        const tabNorm = normalizeUrl(selectedTabObj.url)
+        if (sNorm === tabNorm || sNorm.includes(tabNorm) || tabNorm.includes(sNorm)) return true
+      }
+      if (s.product_name) {
+        const sLower = s.product_name.toLowerCase()
+        const tabLower = selectedProductTab.toLowerCase()
+        const labelLower = (selectedTabObj?.label || '').toLowerCase()
+        if (sLower === tabLower || sLower === labelLower) return true
+        if (labelLower.length >= 5 && sLower.includes(labelLower)) return true
+      }
+      return false
+    })
+  }, [summaries, selectedProductTab, selectedTabObj])
+
   // Scoped comments by selected tab
   const activeComments = useMemo(() => {
     if (selectedProductTab === 'all') return allComments
-    const myUrl = currentProjectData?.my_url || currentProjectMeta?.ownProduct?.url || ''
-    const isOwnProduct = (pName: string, pUrl?: string) => {
-      const p = (pName || '').toLowerCase()
-      if (myUrl && pUrl && (pUrl === myUrl || myUrl.includes(pUrl) || pUrl.includes(myUrl))) return true
-      if (p.includes('rideon')) return true
-      if (ownProductName && ownProductName !== 'Your Product' && p.includes(ownProductName.toLowerCase())) return true
-      return false
-    }
     if (selectedProductTab === 'own') {
       return allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
     }
-    const tabUrl = selectedTabObj?.url
-    const tabShort = (selectedTabObj?.label || selectedProductTab).split('–')[0].split('-')[0].trim().toLowerCase()
+    const tabUrlNorm = selectedTabObj?.url ? normalizeUrl(selectedTabObj.url) : ''
+    const tabAsin = selectedTabObj?.url ? getAsin(selectedTabObj.url) : null
+    const tabNameLower = (selectedTabObj?.competitor?.productName || selectedTabObj?.competitor?.name || selectedProductTab).toLowerCase().trim()
+    const tabShortLower = (selectedTabObj?.label || tabNameLower).split('–')[0].split('-')[0].trim().toLowerCase()
 
     return allComments.filter((c) => {
-      if (c.product_name === selectedProductTab) return true
-      if (tabUrl && c.product_url && c.product_url === tabUrl) return true
+      if (isOwnProduct(c.product_name, c.product_url)) return false
+      if (tabUrlNorm && c.product_url) {
+        const cUrlNorm = normalizeUrl(c.product_url)
+        if (tabUrlNorm === cUrlNorm || tabUrlNorm.includes(cUrlNorm) || cUrlNorm.includes(tabUrlNorm)) return true
+        if (tabAsin && getAsin(cUrlNorm) === tabAsin) return true
+      }
       if (c.product_name) {
-        const cShort = c.product_name.split('–')[0].split('-')[0].trim().toLowerCase()
-        if (cShort === tabShort) return true
+        const cLower = c.product_name.toLowerCase().trim()
+        if (cLower === tabNameLower) return true
+        if (c.product_name === selectedProductTab) return true
+        if (tabShortLower.length >= 4 && (cLower.includes(tabShortLower) || tabShortLower.includes(cLower))) return true
+        if (tabNameLower.length >= 8 && (cLower.includes(tabNameLower.slice(0, 15)) || tabNameLower.includes(cLower.slice(0, 15)))) return true
       }
       return false
     })
@@ -240,29 +509,27 @@ export default function CommentsPage() {
   // Scoped clusters by selected tab
   const activeClusters = useMemo(() => {
     if (selectedProductTab === 'all') return clusters
-    const myUrl = currentProjectData?.my_url || currentProjectMeta?.ownProduct?.url || ''
-    const isOwnProduct = (pName: string, pUrl?: string) => {
-      const p = (pName || '').toLowerCase()
-      if (myUrl && pUrl && (pUrl === myUrl || myUrl.includes(pUrl) || pUrl.includes(myUrl))) return true
-      if (p.includes('rideon')) return true
-      if (ownProductName && ownProductName !== 'Your Product' && p.includes(ownProductName.toLowerCase())) return true
-      return false
-    }
     if (selectedProductTab === 'own') {
       return clusters.filter((cl) => isOwnProduct(cl.targetProduct || cl.competitor_name, cl.competitor_url || cl.sourceUrl))
     }
+    const tabUrlNorm = selectedTabObj?.url ? normalizeUrl(selectedTabObj.url) : ''
     const tabShort = (selectedTabObj?.label || selectedProductTab).split('–')[0].split('-')[0].trim().toLowerCase()
     return clusters.filter((cl) => {
+      if (tabUrlNorm && (cl.competitor_url || cl.sourceUrl)) {
+        const clNorm = normalizeUrl(cl.competitor_url || cl.sourceUrl)
+        if (clNorm === tabUrlNorm || clNorm.includes(tabUrlNorm) || tabUrlNorm.includes(clNorm)) return true
+      }
       const target = (cl.targetProduct || cl.competitor_name || '').toLowerCase()
       return target.includes(tabShort) || tabShort.includes(target)
     })
   }, [clusters, selectedProductTab, selectedTabObj, ownProductName, currentProjectData, currentProjectMeta])
 
   // Scoped Key Numbers
-  const hasCommentsData = activeComments.length > 0 || (selectedProductTab === 'all' && commentsAnalysis.total_analyzed !== undefined)
-  const totalComments = selectedProductTab === 'all'
-    ? (allComments.length > 0 ? allComments.length : commentsAnalysis.total_analyzed)
-    : activeComments.length
+  const totalComments = selectedTabObj?.count || (selectedProductTab === 'all'
+    ? Math.max(allComments.length, totalAnalyzed)
+    : Math.max(activeComments.length, tabSummary?.total_comments || 0))
+
+  const hasCommentsData = totalComments > 0 || activeComments.length > 0
 
   // Buyer inquiries (pre-sale questions, demo requests, license queries)
   const inquiryCount = selectedProductTab === 'all' && commentsAnalysis.inquiry_count !== undefined
@@ -277,6 +544,8 @@ export default function CommentsPage() {
   // Real customer complaints & friction (excluding inquiries and author replies)
   const negativeCount = selectedProductTab === 'all' && commentsAnalysis.complaint_count !== undefined
     ? commentsAnalysis.complaint_count
+    : (tabSummary?.negative_count !== undefined && tabSummary.negative_count > 0)
+    ? tabSummary.negative_count
     : activeComments.filter((c) =>
         c.is_actionable_complaint === true ||
         (c.sentiment === 'negative' &&
@@ -289,6 +558,8 @@ export default function CommentsPage() {
   // Positive feedback
   const positiveCount = selectedProductTab === 'all' && commentsAnalysis.positive_count !== undefined
     ? commentsAnalysis.positive_count
+    : (tabSummary?.positive_count !== undefined && tabSummary.positive_count > 0)
+    ? tabSummary.positive_count
     : activeComments.filter((c) => c.sentiment === 'positive' || c.feedback_type === 'praise' || c.category_type === 'positive').length
 
   // Suggestions & feature requests
@@ -303,6 +574,8 @@ export default function CommentsPage() {
 
   const neutralCount = selectedProductTab === 'all' && commentsAnalysis.neutral_count !== undefined
     ? commentsAnalysis.neutral_count
+    : (tabSummary?.neutral_count !== undefined && tabSummary.neutral_count > 0)
+    ? tabSummary.neutral_count
     : activeComments.filter((c) => c.sentiment === 'neutral' || c.category_type === 'inquiry' || c.category_type === 'author_reply').length
 
   const recurringProblemsCount = activeClusters.length
@@ -597,9 +870,16 @@ export default function CommentsPage() {
 
       allProdTabs.forEach((tab, idx) => {
         const key = `prod_${idx}`
-        const prodComments = tab.id === 'own'
-          ? allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
-          : allComments.filter((c) => c.product_name === tab.id || (tab.url && c.product_url === tab.url))
+        const prodComments =
+          tab.id === 'own'
+            ? allComments.filter((c) => isOwnProduct(c.product_name, c.product_url))
+            : allComments.filter((c) => {
+                if (isOwnProduct(c.product_name, c.product_url)) return false
+                if (tab.url && c.product_url && normalizeUrl(tab.url) === normalizeUrl(c.product_url)) return true
+                if (c.product_name && (c.product_name === tab.id || c.product_name.toLowerCase() === tab.id.toLowerCase())) return true
+                if (tab.competitor?.productName && c.product_name && c.product_name.toLowerCase() === tab.competitor.productName.toLowerCase()) return true
+                return false
+              })
 
         const matched = prodComments.filter((c) => {
           const d = (c.comment_date || '').toLowerCase()
@@ -664,11 +944,11 @@ export default function CommentsPage() {
   }
 
   const inquiryPercent = totalComments && totalComments > 0 && inquiryCount !== undefined
-    ? Math.round((inquiryCount / totalComments) * 100)
+    ? Math.min(100, Math.round((inquiryCount / totalComments) * 100))
     : 0
 
   const frictionPercent = totalComments && totalComments > 0 && negativeCount !== undefined
-    ? Math.round((negativeCount / Math.max(totalComments - authorReplyCount, 1)) * 100)
+    ? Math.min(100, Math.round((negativeCount / Math.max(totalComments - authorReplyCount, 1)) * 100))
     : 0
 
   return (
@@ -694,9 +974,14 @@ export default function CommentsPage() {
       {/* 1.1 PRODUCT SELECTOR TABS (All vs Own Product vs Individual Competitors) */}
       {/* ========================================================================= */}
       <div className="space-y-1.5">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-          Select Product to View Feedback:
-        </span>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+            Select Product to View Feedback:
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            Total Comments Analyzed & Indexed
+          </span>
+        </div>
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-border scrollbar-none">
           {productTabs.map((tab) => {
             const isSelected = selectedProductTab === tab.id
@@ -713,10 +998,13 @@ export default function CommentsPage() {
                     ? 'border-primary text-foreground font-semibold bg-muted/30'
                     : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/10'
                 }`}
+                title={`${tab.count} discussions analyzed${tab.totalMarketplace && tab.totalMarketplace > tab.count ? ` (${tab.totalMarketplace} marketplace comments)` : ''}`}
               >
                 <span>{tab.label}</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground">
-                  {tab.count}
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-semibold">
+                  {tab.totalMarketplace && tab.totalMarketplace > tab.count
+                    ? `${tab.count} / ${tab.totalMarketplace}`
+                    : tab.count}
                 </span>
               </button>
             )
@@ -745,7 +1033,9 @@ export default function CommentsPage() {
             {totalComments !== undefined ? totalComments : 'Not available'}
           </div>
           <div className="text-[10px] text-muted-foreground">
-            {selectedProductTab === 'all' ? 'Total posts collected' : `${selectedTabLabel} posts`}
+            {selectedProductTab === 'all'
+              ? `${totalComments} discussions analyzed across all products`
+              : `${totalComments} discussions analyzed for ${selectedTabLabel}${selectedTabObj?.totalMarketplace && selectedTabObj.totalMarketplace > totalComments ? ` (${selectedTabObj.totalMarketplace} on marketplace)` : ''}`}
           </div>
         </Card>
 

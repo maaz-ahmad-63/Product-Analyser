@@ -516,6 +516,23 @@ export function analyzeSeo(
       }
     }
 
+    const totalCompsCount = competitorProducts.length
+    const matchingCompsCount = competitorMatches.length
+    const compCoverageRatio = totalCompsCount > 0 ? `${matchingCompsCount}/${totalCompsCount}` : '0/0'
+    const isUniversal = totalCompsCount > 0 && matchingCompsCount === totalCompsCount
+
+    // Check if sales leader covers this topic
+    let salesLeaderName = ''
+    let maxSales = -1
+    for (const c of competitorProducts) {
+      const s = c.envatoSales?.current_total_sales ?? 0
+      if (s > maxSales) {
+        maxSales = s
+        salesLeaderName = c.productName || c.websiteTitle || ''
+      }
+    }
+    const coveredBySalesLeader = Boolean(salesLeaderName && competitorNames.includes(salesLeaderName))
+
     observedTopics.push({
       topic: displayTopic,
       normalizedTopic: key,
@@ -527,6 +544,10 @@ export function analyzeSeo(
       competitorNames,
       evidenceSnippet,
       customerMentions: mentions,
+      competitorCoverageRatio: compCoverageRatio,
+      totalCompetitorsCount: totalCompsCount,
+      isUniversalCoverage: isUniversal,
+      coveredByHighestSalesCompetitor: coveredBySalesLeader,
     })
 
     if (inMyProduct) myTopicNames.push(displayTopic)
@@ -547,9 +568,14 @@ export function analyzeSeo(
           ? `${mentions} customer discussions across tracked competitor products${sampleCustomerQuote ? ` (e.g. "${sampleCustomerQuote.trim()}...")` : ''}`
           : undefined
 
+        const leaderNote = coveredBySalesLeader ? ` (including sales leader ${salesLeaderName})` : ''
+        const coveragePrefix = isUniversal
+          ? `${totalCompsCount}/${totalCompsCount} competitors cover this topic — universal market standard`
+          : `${matchingCompsCount}/${totalCompsCount} competitors cover this topic${leaderNote}`
+
         const strategicImpact = mentions > 0
-          ? `Competitors cover "${displayTopic}" (${competitorNames.length} rivals) and ${mentions} prospective buyers discuss this capability. Your listing lacks this terminology, leaving high-intent search traffic to rivals.`
-          : `Competitors cover "${displayTopic}" across their headings and specifications (${competitorNames.length} rivals). Your page lacks this terminology, conceding buyer search intent for this capability.`
+          ? `${coveragePrefix} (${competitorNames.join(', ')}), and ${mentions} prospective buyers discuss this capability. Your listing lacks this terminology, leaving high-intent search traffic to rivals.`
+          : `${coveragePrefix} across their headings and specifications (${competitorNames.join(', ')}). Your page lacks this terminology, conceding buyer search intent for this capability.`
 
         const recommendedAction = mentions > 0
           ? `Incorporate dedicated content, H2 headings, and feature bullet points covering "${displayTopic}" to capture verified buyer demand.`
@@ -857,7 +883,10 @@ export function analyzeSeo(
       in_my_tags: inMyTags,
       in_competitor_titles: inCompTitles,
       content_strength: 'Equal',
-      recommended_action: `Observed topic: maintain natural coverage across headings and specifications.`,
+      recommended_action:
+        Object.values(inCompTitles).filter(Boolean).length > 0
+          ? `${Object.values(inCompTitles).filter(Boolean).length}/${competitorProducts.length} competitors cover this keyword in their listing titles. Maintain natural coverage across headings and specifications.`
+          : `Observed topic: maintain natural coverage across headings and specifications.`,
     }
   })
 

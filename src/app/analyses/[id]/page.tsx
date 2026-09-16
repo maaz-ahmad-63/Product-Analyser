@@ -650,19 +650,23 @@ export default function AnalysisWorkspacePage() {
                   {getProductPrice(myProduct)}
                 </div>
                 <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                  {(myProduct?.pricingPlans?.[0] as any)?.interval || (myProduct?.envatoSales ? 'Commercial license' : 'Not available')}
+                  {meta?.platform === 'amazon' || (myProduct?.url && /amazon\.[a-z.]+/i.test(myProduct.url))
+                    ? 'Current price'
+                    : ((myProduct?.pricingPlans?.[0] as any)?.interval || (myProduct?.envatoSales ? 'Commercial license' : 'Not available'))}
                 </span>
               </Card>
 
               <Card className="border-border bg-card p-3">
                 <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
-                  Total Sales
+                  {meta?.platform === 'amazon' || (myProduct?.url && /amazon\.[a-z.]+/i.test(myProduct.url)) ? 'Purchase Signal' : 'Total Sales'}
                 </span>
                 <div className="text-xl font-bold text-foreground mt-1">
-                  {getProductSales(myProduct)}
+                  {meta?.platform === 'amazon' || (myProduct?.url && /amazon\.[a-z.]+/i.test(myProduct.url))
+                    ? ((myProduct as any)?.amazonPurchaseBadge || (getProductSales(myProduct) !== 'Not available' ? `${getProductSales(myProduct)}+ bought` : 'Not publicly observed'))
+                    : getProductSales(myProduct)}
                 </div>
                 <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                  verified units sold
+                  {meta?.platform === 'amazon' || (myProduct?.url && /amazon\.[a-z.]+/i.test(myProduct.url)) ? 'public Amazon purchase badge' : 'verified units sold'}
                 </span>
               </Card>
 
@@ -936,7 +940,7 @@ export default function AnalysisWorkspacePage() {
                   <div>
                     <span className="text-[10px] text-muted-foreground uppercase font-bold block">Free Tier / Trial</span>
                     <span className="text-foreground text-[11px] mt-0.5 block">
-                      {myProduct?.hasFreePlan ? 'Free Plan Available' : myProduct?.hasFreeTrial ? 'Free Trial' : 'Commercial License Only'}
+                      {myProduct?.hasFreePlan ? 'Free Plan Available' : myProduct?.hasFreeTrial ? 'Free Trial' : (meta?.platform === 'amazon' || (myProduct?.url && /amazon\.[a-z.]+/i.test(myProduct.url)) ? 'Direct Purchase Only' : 'Commercial License Only')}
                     </span>
                   </div>
                 </div>

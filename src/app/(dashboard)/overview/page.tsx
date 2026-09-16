@@ -135,10 +135,19 @@ export default function OverviewPage() {
   const comparison = currentProjectData?.comparison || {}
   const opportunities: any[] = currentProjectData?.opportunities || []
   const commentsAnalysis = currentProjectData?.comments_analysis || {}
+  const totalDiscussionsAnalyzed = commentsAnalysis.total_analyzed || (commentsAnalysis.all_comments?.length || commentsAnalysis.comments?.length || 0)
+  const summaries: any[] = commentsAnalysis.summaries || commentsAnalysis.competitor_summaries || []
   const executiveSummary = currentProjectMeta?.executiveSummary || null
 
   const targetName = currentProjectMeta?.ownProduct?.name || myProduct.productName || myProduct.websiteTitle || projectName
   const targetUrl = currentProjectMeta?.ownProduct?.url || myProduct.url || '#'
+
+  const ownSummary = summaries.find((s: any) =>
+    (targetUrl && s.product_url === targetUrl) ||
+    (s.product_name && s.product_name.toLowerCase().includes('rideon')) ||
+    (targetName && s.product_name && s.product_name.toLowerCase().includes(targetName.toLowerCase().slice(0, 15)))
+  )
+  const ownCommentsCount = ownSummary?.total_comments || (myProduct as any).comments?.length || 0
 
   // Pricing calculations
   const targetPriceNum = getNumericPrice(myProduct)
@@ -397,6 +406,9 @@ export default function OverviewPage() {
                 </Badge>
                 <Badge variant="outline" className="text-[10px]">
                   Rating: {myRating !== 'Not available' ? `${myRating} ★` : 'Unrated'}
+                </Badge>
+                <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
+                  Comments: {ownCommentsCount > 0 ? `${ownCommentsCount} analyzed` : `${totalDiscussionsAnalyzed} market total`}
                 </Badge>
               </div>
             </CardContent>
@@ -699,8 +711,8 @@ export default function OverviewPage() {
               </CardHeader>
               <CardContent className="pt-2 text-xs border-t border-border/50 text-muted-foreground">
                 <div className="flex justify-between items-center">
-                  <span>Discussions: {commentsAnalysis.totalComments || 'Active'}</span>
-                  <span className="text-purple-400 font-semibold">Recurring issues tracked</span>
+                  <span>Discussions: {totalDiscussionsAnalyzed > 0 ? `${totalDiscussionsAnalyzed} analyzed` : 'Active'}</span>
+                  <span className="text-purple-400 font-semibold">{commentsAnalysis.clusters?.length || commentsAnalysis.recurring_complaints?.length || 0} issues tracked</span>
                 </div>
               </CardContent>
             </Card>

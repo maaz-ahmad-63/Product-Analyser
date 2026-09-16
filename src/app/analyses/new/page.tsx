@@ -18,6 +18,8 @@ import {
   Star,
   MessageSquare,
   TrendingUp,
+  ShoppingCart,
+  Swords,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -28,6 +30,14 @@ interface ModuleOption {
   id: string
   label: string
   description: string
+  icon: any
+}
+
+interface AmazonModuleOption {
+  id: string
+  label: string
+  items: string[]
+  underlyingModules: string[]
   icon: any
 }
 
@@ -70,12 +80,14 @@ const AVAILABLE_MODULES: ModuleOption[] = [
   },
 ]
 
+import { AMAZON_MODULES } from '@/components/analyses/amazon-modules'
+
 export default function NewAnalysisPage() {
   const router = useRouter()
 
   // Form State
   const [analysisName, setAnalysisName] = useState('')
-  const [platform, setPlatform] = useState<'envato' | 'generic'>('envato')
+  const [platform, setPlatform] = useState<'envato' | 'amazon' | 'generic'>('envato')
   const [myProductUrl, setMyProductUrl] = useState('')
   const [myProductName, setMyProductName] = useState('')
   const [competitorUrls, setCompetitorUrls] = useState<string[]>([''])
@@ -92,6 +104,42 @@ export default function NewAnalysisPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitProgress, setSubmitProgress] = useState('')
   const [error, setError] = useState<string | null>(null)
+
+  // Platform Change
+  const handlePlatformChange = (p: 'envato' | 'amazon' | 'generic') => {
+    setPlatform(p)
+    setError(null)
+    if (p === 'amazon') {
+      setSelectedModules([
+        'product_intelligence',
+        'reviews',
+        'comments',
+        'sales',
+        'seo',
+        'opportunities',
+      ])
+    } else {
+      setSelectedModules([
+        'product_intelligence',
+        'seo',
+        'sales',
+        'reviews',
+        'comments',
+        'opportunities',
+      ])
+    }
+  }
+
+  // URL Change with auto platform detection
+  const handleMyProductUrlChange = (val: string) => {
+    setMyProductUrl(val)
+    const lower = val.toLowerCase()
+    if (lower.includes('amazon.') || lower.includes('amzn.')) {
+      if (platform !== 'amazon') handlePlatformChange('amazon')
+    } else if (lower.includes('codecanyon.net') || lower.includes('themeforest.net')) {
+      if (platform !== 'envato') handlePlatformChange('envato')
+    }
+  }
 
   // Competitor URL controls
   const handleAddCompetitor = () => {
@@ -114,7 +162,7 @@ export default function NewAnalysisPage() {
     setCompetitorUrls(updated)
   }
 
-  // Module toggle
+  // Standard Module toggle (Envato / Generic)
   const toggleModule = (id: string) => {
     if (selectedModules.includes(id)) {
       if (selectedModules.length === 1) {
@@ -125,6 +173,27 @@ export default function NewAnalysisPage() {
     } else {
       setError(null)
       setSelectedModules([...selectedModules, id])
+    }
+  }
+
+  // Amazon High-Level Module helpers
+  const isAmazonModuleSelected = (amzMod: AmazonModuleOption) => {
+    return amzMod.underlyingModules.some((m) => selectedModules.includes(m))
+  }
+
+  const toggleAmazonModule = (amzMod: AmazonModuleOption) => {
+    const isSelected = isAmazonModuleSelected(amzMod)
+    if (isSelected) {
+      const remaining = selectedModules.filter((m) => !amzMod.underlyingModules.includes(m))
+      if (remaining.length === 0) {
+        setError('At least one intelligence module must be selected.')
+        return
+      }
+      setError(null)
+      setSelectedModules(remaining)
+    } else {
+      setError(null)
+      setSelectedModules(Array.from(new Set([...selectedModules, ...amzMod.underlyingModules])))
     }
   }
 
@@ -301,10 +370,10 @@ export default function NewAnalysisPage() {
               <label className="block text-xs font-medium text-foreground mb-2">
                 Platform <span className="text-rose-400">*</span>
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <button
                   type="button"
-                  onClick={() => setPlatform('envato')}
+                  onClick={() => handlePlatformChange('envato')}
                   disabled={isSubmitting}
                   className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
                     platform === 'envato'
@@ -316,7 +385,7 @@ export default function NewAnalysisPage() {
                   <div>
                     <div className="font-semibold text-xs text-foreground flex items-center gap-1.5">
                       <span>Envato</span>
-                      <Badge variant="outline" className="text-[9px] py-0 px-1 text-emerald-400 border-emerald-500/20">Active Connector</Badge>
+                      <Badge variant="outline" className="text-[9px] py-0 px-1 text-emerald-400 border-emerald-500/20">Active</Badge>
                     </div>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
                       CodeCanyon, ThemeForest with live sales, comments, and rating telemetry.
@@ -326,7 +395,29 @@ export default function NewAnalysisPage() {
 
                 <button
                   type="button"
-                  onClick={() => setPlatform('generic')}
+                  onClick={() => handlePlatformChange('amazon')}
+                  disabled={isSubmitting}
+                  className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
+                    platform === 'amazon'
+                      ? 'border-primary bg-primary/10 text-foreground ring-1 ring-primary'
+                      : 'border-border bg-background hover:bg-muted/40 text-muted-foreground'
+                  }`}
+                >
+                  <ShoppingCart className={`h-4 w-4 mt-0.5 ${platform === 'amazon' ? 'text-primary' : ''}`} />
+                  <div>
+                    <div className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                      <span>Amazon</span>
+                      <Badge variant="outline" className="text-[9px] py-0 px-1 text-amber-400 border-amber-500/20">Active</Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Amazon listings with BSR, verified reviews, bullet features, and sentiment.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handlePlatformChange('generic')}
                   disabled={isSubmitting}
                   className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
                     platform === 'generic'
@@ -352,8 +443,8 @@ export default function NewAnalysisPage() {
                 <span className="text-[11px] text-muted-foreground font-medium block mb-2">
                   Planned Platform Connectors
                 </span>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 opacity-60">
-                  {['Shopify App Store', 'Amazon Marketplace', 'Chrome Web Store', 'WordPress Plugins'].map((plat) => (
+                <div className="grid grid-cols-3 gap-2 opacity-60">
+                  {['Shopify App Store', 'Chrome Web Store', 'WordPress Plugins'].map((plat) => (
                     <div
                       key={plat}
                       className="p-2 rounded border border-dashed border-border bg-muted/20 text-center select-none cursor-not-allowed"
@@ -376,7 +467,9 @@ export default function NewAnalysisPage() {
               2. My Product
             </CardTitle>
             <CardDescription className="text-xs text-muted-foreground">
-              Specify your product's landing page or marketplace listing URL.
+              {platform === 'amazon'
+                ? "Specify your Amazon product listing URL (amazon.com/dp/... or amzn.to/...)."
+                : "Specify your product's landing page or marketplace listing URL."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -387,12 +480,14 @@ export default function NewAnalysisPage() {
               <Input
                 type="url"
                 placeholder={
-                  platform === 'envato'
+                  platform === 'amazon'
+                    ? 'https://www.amazon.com/dp/B0CX234XYZ or https://amzn.to/3example'
+                    : platform === 'envato'
                     ? 'https://codecanyon.net/item/rideon-taxi-booking/59633641'
                     : 'https://mysaasproduct.com'
                 }
                 value={myProductUrl}
-                onChange={(e) => setMyProductUrl(e.target.value)}
+                onChange={(e) => handleMyProductUrlChange(e.target.value)}
                 className="text-xs h-9 font-mono"
                 disabled={isSubmitting}
                 required
@@ -404,7 +499,11 @@ export default function NewAnalysisPage() {
                 Optional Product Name
               </label>
               <Input
-                placeholder="e.g. RideOn Taxi Booking (defaults to detected title if empty)"
+                placeholder={
+                  platform === 'amazon'
+                    ? 'e.g. Echo Show 8 or Anker Wireless Charger (auto-detected if empty)'
+                    : 'e.g. RideOn Taxi Booking (defaults to detected title if empty)'
+                }
                 value={myProductName}
                 onChange={(e) => setMyProductName(e.target.value)}
                 className="text-xs h-9"
@@ -422,7 +521,9 @@ export default function NewAnalysisPage() {
                 3. Competitors
               </CardTitle>
               <CardDescription className="text-xs text-muted-foreground">
-                Add 1 or more competitor URLs to benchmark against.
+                {platform === 'amazon'
+                  ? 'Add 1 or more Amazon competitor product URLs to benchmark against.'
+                  : 'Add 1 or more competitor URLs to benchmark against.'}
               </CardDescription>
             </div>
             <Button
@@ -444,7 +545,9 @@ export default function NewAnalysisPage() {
                   <Input
                     type="url"
                     placeholder={
-                      platform === 'envato'
+                      platform === 'amazon'
+                        ? `https://www.amazon.com/dp/B0D1234ABC`
+                        : platform === 'envato'
                         ? `https://codecanyon.net/item/competitor-item/${idx + 1}`
                         : `https://competitor-${idx + 1}.com`
                     }
@@ -479,56 +582,152 @@ export default function NewAnalysisPage() {
         {/* SECTION 4: Modules Selection */}
         <Card className="border-border bg-card">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-foreground">
-              4. Intelligence Modules
-            </CardTitle>
-            <CardDescription className="text-xs text-muted-foreground">
-              Choose the analytical dimensions to extract and evaluate.
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-semibold text-foreground">
+                  4. Intelligence Modules
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  {platform === 'amazon'
+                    ? 'Select the high-level intelligence dimensions to analyze across Amazon listings.'
+                    : 'Choose the analytical dimensions to extract and evaluate.'}
+                </CardDescription>
+              </div>
+              {platform === 'amazon' && (
+                <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-500/30">
+                  Amazon 5-Module Pack
+                </Badge>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {AVAILABLE_MODULES.map((mod) => {
-                const isSelected = selectedModules.includes(mod.id)
-                const Icon = mod.icon
-                return (
-                  <button
-                    key={mod.id}
-                    type="button"
-                    onClick={() => toggleModule(mod.id)}
-                    disabled={isSubmitting}
-                    className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
-                      isSelected
-                        ? 'border-primary/60 bg-primary/5 text-foreground'
-                        : 'border-border bg-background/50 hover:bg-muted/30 text-muted-foreground opacity-60'
-                    }`}
-                  >
-                    <div
-                      className={`h-6 w-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${
+            {platform === 'amazon' ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-muted-foreground pb-1">
+                  <span>Select which of the 5 Amazon intelligence modules to include:</span>
+                  <span className="font-mono text-[11px] text-primary">
+                    {AMAZON_MODULES.filter(isAmazonModuleSelected).length} of 5 Active
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {AMAZON_MODULES.map((mod, idx) => {
+                    const isSelected = isAmazonModuleSelected(mod)
+                    const Icon = mod.icon
+                    const isLast = idx === AMAZON_MODULES.length - 1
+                    return (
+                      <button
+                        key={mod.id}
+                        type="button"
+                        onClick={() => toggleAmazonModule(mod)}
+                        disabled={isSubmitting}
+                        className={`flex flex-col p-3.5 rounded-lg border text-left transition-all relative ${
+                          isLast ? 'sm:col-span-2' : ''
+                        } ${
+                          isSelected
+                            ? 'border-primary/70 bg-primary/5 text-foreground ring-1 ring-primary/25 shadow-xs'
+                            : 'border-border bg-background/50 hover:bg-muted/30 text-muted-foreground opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2 w-full">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`h-6 w-6 rounded flex items-center justify-center shrink-0 ${
+                                isSelected
+                                  ? 'bg-primary/20 text-primary'
+                                  : 'bg-muted text-muted-foreground'
+                              }`}
+                            >
+                              <Icon className="h-3.5 w-3.5" />
+                            </div>
+                            <span className="font-semibold text-xs text-foreground block">
+                              {idx + 1}. {mod.label}
+                            </span>
+                          </div>
+                          {isSelected ? (
+                            <Badge
+                              variant="default"
+                              className="text-[9px] h-4 px-1.5 bg-primary/20 text-primary border border-primary/40 font-mono"
+                            >
+                              Active
+                            </Badge>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground font-mono">
+                              Off
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-2.5 pt-2 border-t border-border/40 w-full">
+                          <ul
+                            className={`text-[11px] text-muted-foreground ${
+                              isLast
+                                ? 'grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1'
+                                : 'space-y-1'
+                            }`}
+                          >
+                            {mod.items.map((item, i) => (
+                              <li key={i} className="flex items-center gap-1.5">
+                                <span
+                                  className={`h-1 w-1 rounded-full shrink-0 ${
+                                    isSelected ? 'bg-primary/80' : 'bg-muted-foreground/40'
+                                  }`}
+                                />
+                                <span className={isSelected ? 'text-foreground/90' : ''}>
+                                  {item}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {AVAILABLE_MODULES.map((mod) => {
+                  const isSelected = selectedModules.includes(mod.id)
+                  const Icon = mod.icon
+                  return (
+                    <button
+                      key={mod.id}
+                      type="button"
+                      onClick={() => toggleModule(mod.id)}
+                      disabled={isSubmitting}
+                      className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
                         isSelected
-                          ? 'bg-primary/20 text-primary'
-                          : 'bg-muted text-muted-foreground'
+                          ? 'border-primary/60 bg-primary/5 text-foreground'
+                          : 'border-border bg-background/50 hover:bg-muted/30 text-muted-foreground opacity-60'
                       }`}
                     >
-                      <Icon className="h-3.5 w-3.5" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-xs text-foreground">
-                          {mod.label}
-                        </span>
-                        {isSelected && (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                        )}
+                      <div
+                        className={`h-6 w-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${
+                          isSelected
+                            ? 'bg-primary/20 text-primary'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
                       </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
-                        {mod.description}
-                      </p>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-xs text-foreground">
+                            {mod.label}
+                          </span>
+                          {isSelected && (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
+                          {mod.description}
+                        </p>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
 

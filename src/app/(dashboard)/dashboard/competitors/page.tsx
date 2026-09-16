@@ -25,6 +25,9 @@ import {
   ChevronUp,
   Target,
   Trophy,
+  MessageSquare,
+  Trash2,
+  X,
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { sanitizeFeatureList } from '@/services/website-analyzer/feature-analyzer'
@@ -90,14 +93,76 @@ function getProductRating(prod?: any): string {
   return 'Not available'
 }
 
+function getProductCommentsCount(prod?: any, commentsAnalysis?: any): string {
+  if (!prod) return '0'
+  const summaries: any[] = commentsAnalysis?.summaries || commentsAnalysis?.competitor_summaries || []
+  const found = summaries.find((s: any) =>
+    (prod.url && s.product_url === prod.url) ||
+    (prod.productName && s.product_name && (s.product_name.toLowerCase().includes(prod.productName.toLowerCase().slice(0, 15)) || prod.productName.toLowerCase().includes(s.product_name.toLowerCase().slice(0, 15))))
+  )
+  const analyzed = found?.total_comments ?? (prod.comments?.length || 0)
+  const marketplace = prod.envatoSales?.comment_count
+  if (marketplace && marketplace > analyzed) {
+    return `${analyzed} / ${marketplace}`
+  }
+  if (analyzed > 0) return `${analyzed}`
+  if (marketplace) return `${marketplace}`
+  return '0'
+}
+
 export default function CompetitorsPage() {
   const { currentProjectId, currentProjectMeta, currentProjectData, isLoading, projects, refreshProjects } = useProject()
   const [showFullTelemetry, setShowFullTelemetry] = useState(false)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [showBsrModal, setShowBsrModal] = useState(false)
   const [newCompetitorUrl, setNewCompetitorUrl] = useState('')
   const [addingCompetitor, setAddingCompetitor] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
+  const [removingUrl, setRemovingUrl] = useState<string | null>(null)
+
+  // Escape key & body scroll lock for BSR modal
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowBsrModal(false)
+        setIsAddModalOpen(false)
+      }
+    }
+    if (showBsrModal || isAddModalOpen) {
+      window.addEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = 'unset'
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = 'unset'
+    }
+  }, [showBsrModal, isAddModalOpen])
+
+  const handleRemoveCompetitor = async (competitorUrl: string) => {
+    if (!currentProjectId || !competitorUrl) return
+    if (!confirm('Are you sure you want to remove this competitor? The market analysis, SEO, features, and opportunities will immediately recalculate without it.')) return
+
+    setRemovingUrl(competitorUrl)
+    try {
+      const res = await fetch(`/api/analyze/${currentProjectId}/competitors?url=${encodeURIComponent(competitorUrl)}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to remove competitor')
+      }
+      if (refreshProjects) {
+        await refreshProjects()
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to remove competitor')
+    } finally {
+      setRemovingUrl(null)
+    }
+  }
 
   const handleAddCompetitor = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -168,8 +233,20 @@ export default function CompetitorsPage() {
   const myProduct = currentProjectData?.my_product || {}
   const competitors: any[] = currentProjectData?.competitors_data || []
   const comparison = currentProjectData?.comparison || {}
+  const commentsAnalysis = currentProjectData?.comments_analysis || {}
+  const totalCommentsIndexed = commentsAnalysis.total_analyzed || (commentsAnalysis.all_comments?.length || 0)
   const metaCompetitors = currentProjectMeta?.competitors || []
   const hasCompetitorData = competitors.length > 0
+
+  const isAmazonWorkspace =
+    currentProjectMeta?.platform === 'amazon' ||
+    Boolean(myProduct.url && /amazon\.[a-z.]+/i.test(myProduct.url))
+  const marketPosition = comparison.marketPosition
+  const hasBsr = Boolean(
+    isAmazonWorkspace &&
+    marketPosition &&
+    (marketPosition.myRank !== null || marketPosition.competitorBsrs?.some((c: any) => c.rank !== null))
+  )
 
   const competitorPrices = competitors
     .map(getNumericPrice)
@@ -279,12 +356,73 @@ export default function CompetitorsPage() {
         </CardContent>
       </Card>
 
+      {/* MARKET POSITION (BSR) — Platform-Gated for Amazon Workspaces (Phase 2) */}
+      {hasBsr && (
+        <Card className="border-primary/40 bg-gradient-to-r from-primary/10 via-primary/5 to-card p-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[9px] uppercase font-bold tracking-wider text-primary border-primary/30">
+                  MARKET POSITION
+                </Badge>
+                {marketPosition?.myCategory && (
+                  <span className="text-xs text-muted-foreground">
+                    Category: <strong className="text-foreground">{marketPosition.myCategory}</strong>
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-baseline gap-5 pt-0.5">
+                <div>
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+                    Your BSR
+                  </span>
+                  <span className="text-xl font-bold text-foreground">
+                    {marketPosition?.myBsrFormatted}
+                  </span>
+                </div>
+                <div className="border-l border-border pl-5">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+                    Competitor BSR Range
+                  </span>
+                  <span className="text-xl font-bold text-primary">
+                    {marketPosition?.competitorBsrRange || marketPosition?.marketRange}
+                  </span>
+                </div>
+                {(marketPosition?.bestObservedCompetitor || marketPosition?.strongestCompetitor) && (
+                  <div className="border-l border-border pl-5 hidden sm:block">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+                      Best Observed Competitor Rank
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">
+                      {(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.name} ({(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.bsrFormatted})
+                    </span>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {marketPosition?.relativePositionText}
+              </p>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBsrModal(true)}
+              className="shrink-0 gap-1.5 text-xs h-8 border-primary/40 hover:bg-primary/10"
+            >
+              <TrendingUp className="h-3.5 w-3.5 text-primary" />
+              <span>View BSR Details</span>
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* LEVEL 2: KEY NUMBERS (3-5 Key Metrics) */}
       <div className="space-y-2">
         <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground block">
           2. Market Key Numbers
         </span>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           <Card className="border-border bg-card p-3.5">
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
               Rivals Tracked
@@ -307,21 +445,34 @@ export default function CompetitorsPage() {
             <span className="text-[10px] text-muted-foreground mt-0.5 block">
               {targetPriceNum && avgCompetitorPrice
                 ? Number(targetPriceNum) < Number(avgCompetitorPrice)
-                  ? `You undercut by $${(Number(avgCompetitorPrice) - Number(targetPriceNum)).toFixed(0)}`
-                  : `You are $${(Number(targetPriceNum) - Number(avgCompetitorPrice)).toFixed(0)} premium`
                 : 'competitor average'}
             </span>
           </Card>
 
           <Card className="border-border bg-card p-3.5">
             <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
-              Sales Volume Leader
+              {isAmazonWorkspace ? 'Top Purchase Signal' : 'Sales Volume Leader'}
             </span>
             <div className="text-base font-bold text-foreground mt-1 truncate" title={salesLeaderName}>
               {salesLeaderName}
             </div>
             <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              {maxSales > 0 ? `${maxSales.toLocaleString()} total sales` : 'Market established'}
+              {isAmazonWorkspace
+                ? (maxSales > 0 ? `${maxSales.toLocaleString()}+ bought in past month` : 'Not publicly observed')
+                : (maxSales > 0 ? `${maxSales.toLocaleString()} total sales` : 'Market established')}
+            </span>
+          </Card>
+
+          <Card className="border-border bg-card p-3.5">
+            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider block">
+              {isAmazonWorkspace ? 'Reviews Analyzed' : 'Total Comments'}
+            </span>
+            <div className="text-2xl font-bold text-primary mt-1 flex items-center gap-1.5">
+              <MessageSquare className="h-5 w-5 text-primary" />
+              <span>{totalCommentsIndexed || '0'}</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground mt-0.5 block">
+              {isAmazonWorkspace ? 'customer reviews analyzed' : 'discussions analyzed'}
             </span>
           </Card>
 
@@ -446,16 +597,27 @@ export default function CompetitorsPage() {
 
                   <CardContent className="space-y-3 pt-3 text-xs flex-1">
                     {/* Key Stats Row */}
-                    <div className="grid grid-cols-3 gap-2 p-2 rounded bg-muted/20 border border-border/40 text-center text-[11px]">
+                    <div className="grid grid-cols-4 gap-2 p-2 rounded bg-muted/20 border border-border/40 text-center text-[11px]">
                       <div>
-                        <span className="text-muted-foreground block text-[10px]">Sales Volume</span>
-                        <span className="font-semibold text-foreground">{compSales}</span>
+                        <span className="text-muted-foreground block text-[10px]">{isAmazonWorkspace ? 'Purchase Signal' : 'Sales Volume'}</span>
+                        <span className="font-semibold text-foreground">
+                          {isAmazonWorkspace
+                            ? ((comp as any)?.amazonPurchaseBadge || (compSales !== 'Not available' && compSales !== '0' ? `${compSales}+ bought` : 'Not publicly observed'))
+                            : compSales}
+                        </span>
                       </div>
                       <div>
                         <span className="text-muted-foreground block text-[10px]">Buyer Rating</span>
                         <span className="font-semibold text-foreground flex items-center justify-center gap-0.5">
                           <Star className="h-3 w-3 text-amber-400 fill-amber-400" />
                           {compRating}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[10px]">{isAmazonWorkspace ? 'Reviews' : 'Total Comments'}</span>
+                        <span className="font-semibold text-foreground flex items-center justify-center gap-1">
+                          <MessageSquare className="h-3 w-3 text-primary" />
+                          {getProductCommentsCount(comp, commentsAnalysis)}
                         </span>
                       </div>
                       <div>
@@ -497,9 +659,27 @@ export default function CompetitorsPage() {
                   </CardContent>
 
                   <div className="p-3 border-t border-border/50 flex items-center justify-between text-xs bg-muted/10">
-                    <span className="text-[10px] text-muted-foreground">
-                      Scraped from public source
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-muted-foreground">
+                        Scraped from public source
+                      </span>
+                      {comp.url && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCompetitor(comp.url)}
+                          disabled={removingUrl === comp.url}
+                          className="text-[10px] text-muted-foreground hover:text-red-400 flex items-center gap-1 transition-colors disabled:opacity-50"
+                          title="Remove competitor from project analysis"
+                        >
+                          {removingUrl === comp.url ? (
+                            <RotateCw className="h-2.5 w-2.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-2.5 w-2.5" />
+                          )}
+                          <span>{removingUrl === comp.url ? 'Removing...' : 'Remove'}</span>
+                        </button>
+                      )}
+                    </div>
                     <Link href="/dashboard/changes">
                       <Button variant="ghost" size="xs" className="h-6 text-[11px] gap-1 text-primary">
                         Battle Features <ArrowRight className="h-2.5 w-2.5" />
@@ -555,18 +735,24 @@ export default function CompetitorsPage() {
         </div>
       </div>
 
-      {/* LEVEL 6: VIEW DETAILS (Progressive Disclosure: Full Telemetry Table) */}
-      <div className="border border-border/80 rounded-xl bg-card overflow-hidden">
+      {/* LEVEL 6: RAW TELEMETRY BENCHMARK TABLE (Progressive Disclosure) */}
+      <Card className="border-border bg-card overflow-hidden">
         <button
-          type="button"
           onClick={() => setShowFullTelemetry(!showFullTelemetry)}
           className="w-full p-4 flex items-center justify-between text-left hover:bg-muted/10 transition-colors"
         >
-          <div className="flex items-center gap-2">
-            <Layers className="h-4 w-4 text-muted-foreground" />
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              6. View Details: Raw Benchmark Telemetry Table
-            </span>
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                6. Complete Market Benchmark Matrix
+              </span>
+              <Badge variant="outline" className="text-[10px] text-muted-foreground font-mono">
+                {competitors.length + 1} products
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Direct side-by-side comparison of list pricing, sales volume, rating, total comments, and features.
+            </p>
           </div>
           <div className="flex items-center gap-1 text-xs text-primary font-medium">
             <span>{showFullTelemetry ? 'Hide Details' : 'View Full Table'}</span>
@@ -581,9 +767,10 @@ export default function CompetitorsPage() {
                 <thead className="bg-muted/30 border-b border-border text-muted-foreground font-semibold uppercase tracking-wider text-[10px]">
                   <tr>
                     <th className="py-2.5 px-4">Product</th>
-                    <th className="py-2.5 px-4">List Price</th>
-                    <th className="py-2.5 px-4">Sales Volume</th>
+                    <th className="py-2.5 px-4">{isAmazonWorkspace ? 'Current Price' : 'List Price'}</th>
+                    <th className="py-2.5 px-4">{isAmazonWorkspace ? 'Purchase Signal (Past Month)' : 'Sales Volume'}</th>
                     <th className="py-2.5 px-4">Rating</th>
+                    <th className="py-2.5 px-4">{isAmazonWorkspace ? 'Reviews Analyzed' : 'Total Comments'}</th>
                     <th className="py-2.5 px-4">Features Detected</th>
                     <th className="py-2.5 px-4 text-right">Source Link</th>
                   </tr>
@@ -608,7 +795,9 @@ export default function CompetitorsPage() {
                       {getProductPrice(myProduct)}
                     </td>
                     <td className="py-3 px-4 text-muted-foreground">
-                      {getProductSales(myProduct)}
+                      {isAmazonWorkspace
+                        ? ((myProduct as any)?.amazonPurchaseBadge || (getProductSales(myProduct) !== 'Not available' ? `${getProductSales(myProduct)}+ bought` : 'Not publicly observed'))
+                        : getProductSales(myProduct)}
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-1">
@@ -616,13 +805,19 @@ export default function CompetitorsPage() {
                         <span className="font-semibold text-foreground">{getProductRating(myProduct)}</span>
                       </div>
                     </td>
+                    <td className="py-3 px-4 font-medium text-foreground">
+                      <div className="flex items-center gap-1 text-primary font-semibold">
+                        <MessageSquare className="h-3.5 w-3.5 text-primary" />
+                        <span>{getProductCommentsCount(myProduct, commentsAnalysis)}</span>
+                      </div>
+                    </td>
                     <td className="py-3 px-4 text-muted-foreground">
                       {sanitizeFeatureList(myProduct.features).length} features
                     </td>
                     <td className="py-3 px-4 text-right">
-                      <Link href="/dashboard/my-saas">
+                      <Link href="/dashboard/reviews">
                         <Button variant="ghost" size="xs" className="h-6 text-[11px] gap-1">
-                          Sales & Pricing <ArrowRight className="h-2.5 w-2.5" />
+                          {isAmazonWorkspace ? 'Reviews' : 'Comments'} <ArrowRight className="h-2.5 w-2.5" />
                         </Button>
                       </Link>
                     </td>
@@ -655,12 +850,20 @@ export default function CompetitorsPage() {
                           {getProductPrice(comp)}
                         </td>
                         <td className="py-3 px-4 text-muted-foreground">
-                          {getProductSales(comp)}
+                          {isAmazonWorkspace
+                            ? ((comp as any)?.amazonPurchaseBadge || (getProductSales(comp) !== 'Not available' && getProductSales(comp) !== '0' ? `${getProductSales(comp)}+ bought` : 'Not publicly observed'))
+                            : getProductSales(comp)}
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-1">
                             <Star className="h-3.5 w-3.5 text-amber-400 fill-amber-400" />
                             <span className="font-semibold text-foreground">{getProductRating(comp)}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 font-medium text-foreground">
+                          <div className="flex items-center gap-1 text-muted-foreground">
+                            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span>{getProductCommentsCount(comp, commentsAnalysis)}</span>
                           </div>
                         </td>
                         <td className="py-3 px-4 text-muted-foreground">
@@ -696,7 +899,7 @@ export default function CompetitorsPage() {
             </div>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* ADD COMPETITOR MODAL */}
       {isAddModalOpen && (
@@ -782,6 +985,208 @@ export default function CompetitorsPage() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* BSR MARKET POSITION DETAILS MODAL (Phase 2) */}
+      {/* ========================================================================= */}
+      {showBsrModal && marketPosition && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in-0"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowBsrModal(false)
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-border/80 flex items-start justify-between gap-3 bg-muted/20">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-[10px] font-bold tracking-wider text-primary border-primary/30 bg-primary/10">
+                    BSR MARKET POSITION
+                  </Badge>
+                  {marketPosition.myCategory && (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {marketPosition.myCategory}
+                    </Badge>
+                  )}
+                </div>
+                <h2 className="text-lg sm:text-xl font-bold text-foreground">
+                  Best Sellers Rank & Relative Market Positioning
+                </h2>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  Public Best Sellers Rank (BSR) comparison across your product and all added competitors. Note: BSR reflects relative sales velocity on Amazon and is never fabricated or converted into units/revenue.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowBsrModal(false)}
+                className="h-8 w-8 p-0 rounded-full text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Summary Bar */}
+            <div className="p-3 sm:p-4 border-b border-border/60 bg-muted/10 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-4">
+                <div>
+                  <span className="text-muted-foreground">Your BSR:</span>{' '}
+                  <strong className="text-foreground">{marketPosition.myBsrFormatted}</strong>
+                </div>
+                <div className="border-l border-border pl-4">
+                  <span className="text-muted-foreground">Competitor BSR Range:</span>{' '}
+                  <strong className="text-primary">{marketPosition.competitorBsrRange || marketPosition.marketRange}</strong>
+                </div>
+                {(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor) && (
+                  <div className="border-l border-border pl-4 hidden sm:block">
+                    <span className="text-muted-foreground">Best Observed Competitor:</span>{' '}
+                    <strong className="text-foreground">
+                      {(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.name} ({(marketPosition.bestObservedCompetitor || marketPosition.strongestCompetitor)?.bsrFormatted})
+                    </strong>
+                  </div>
+                )}
+              </div>
+              <span className="text-muted-foreground italic">
+                {marketPosition.historicalObservationsNote}
+              </span>
+            </div>
+
+            {/* Competitor-by-Competitor Evidence List */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+              {/* Target Product Entry */}
+              <Card className="border-primary/40 bg-primary/5 p-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-primary text-primary-foreground text-[10px]">
+                        YOUR PRODUCT
+                      </Badge>
+                      <span className="font-bold text-sm text-foreground">
+                        {myProduct.productName || 'Your Product'}
+                      </span>
+                    </div>
+                    {myProduct.url && (
+                      <span className="text-[11px] text-muted-foreground block truncate max-w-md">
+                        {myProduct.url}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 text-right">
+                    <div>
+                      <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                        Observed BSR
+                      </span>
+                      <span className="text-base font-bold text-primary">
+                        {marketPosition.myBsrFormatted}
+                      </span>
+                    </div>
+                    {marketPosition.myCategory && (
+                      <div className="border-l border-border pl-3 text-left">
+                        <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                          Category
+                        </span>
+                        <span className="text-xs font-semibold text-foreground">
+                          {marketPosition.myCategory}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {myProduct.amazonBsr?.subcategories && myProduct.amazonBsr.subcategories.length > 0 && (
+                  <div className="mt-2.5 pt-2 border-t border-border/40 flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold">Subcategories:</span>
+                    {myProduct.amazonBsr.subcategories.map((sub: any, sIdx: number) => (
+                      <Badge key={sIdx} variant="outline" className="text-[10px]">
+                        {sub.rankFormatted} in {sub.category}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
+              {/* Competitors Entries */}
+              {(marketPosition.competitorBsrs || []).map((comp: any, idx: number) => (
+                <Card key={idx} className="border-border bg-card p-3.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">
+                          COMPETITOR {idx + 1}
+                        </Badge>
+                        <span className="font-bold text-sm text-foreground">
+                          {comp.name}
+                        </span>
+                        {comp.relativeRank && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Rank #{comp.relativeRank}
+                          </Badge>
+                        )}
+                      </div>
+                      {comp.url && (
+                        <span className="text-[11px] text-muted-foreground block truncate max-w-md">
+                          {comp.url}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3 text-right">
+                      <div>
+                        <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                          Observed BSR
+                        </span>
+                        <span className={`text-base font-bold ${comp.rank !== null ? 'text-foreground' : 'text-muted-foreground'}`}>
+                          {comp.bsrFormatted}
+                        </span>
+                      </div>
+                      {comp.category && (
+                        <div className="border-l border-border pl-3 text-left">
+                          <span className="text-[10px] text-muted-foreground uppercase font-bold block">
+                            Category
+                          </span>
+                          <span className="text-xs font-semibold text-foreground">
+                            {comp.category}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {comp.subcategories && comp.subcategories.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-border/40 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground uppercase font-bold">Subcategories:</span>
+                      {comp.subcategories.map((sub: any, sIdx: number) => (
+                        <Badge key={sIdx} variant="outline" className="text-[10px]">
+                          {sub.rankFormatted} in {sub.category}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 sm:p-4 border-t border-border/80 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Data extracted strictly from public Amazon listings. Never converted to units or revenue.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBsrModal(false)}
+                className="text-xs"
+              >
+                Close BSR Details
+              </Button>
+            </div>
           </div>
         </div>
       )}

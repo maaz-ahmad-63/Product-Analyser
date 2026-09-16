@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio'
 import { execFile } from 'child_process'
 import path from 'path'
 import { prisma } from '../../lib/prisma'
-import { ExtractedProductData, PricingPlanExtracted, DiscoveredPage, EnvatoSalesData } from './types'
+import { ExtractedProductData, PricingPlanExtracted, DiscoveredPage, EnvatoSalesData, AmazonBsrData } from './types'
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -57,6 +57,8 @@ interface StealthScraperOutput {
   isAmazon?: boolean
   isShopify?: boolean
   envatoSales?: EnvatoSalesData | null
+  amazonBsr?: AmazonBsrData | null
+  amazonPurchaseBadge?: string | null
   thumbnailUrl?: string | null
   headings?: { h1: string[]; h2: string[]; h3: string[] }
   imageAltsCount?: number
@@ -728,6 +730,9 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
               : null,
         }
       : null,
+    amazonBsr: stealthResult?.amazonBsr || null,
+    amazonPurchaseBadge: stealthResult?.amazonPurchaseBadge || null,
+    specs: stealthResult?.specs || {},
     thumbnailUrl: stealthResult?.thumbnailUrl || null,
     headings: stealthResult?.headings || {
       h1: heroH1 ? [heroH1] : [],
@@ -836,6 +841,9 @@ function buildEmptyData(url: string, errors: string[]): ExtractedProductData {
     collectionErrors: errors,
     analyzedAt: new Date().toISOString(),
     envatoSales: null,
+    amazonBsr: null,
+    amazonPurchaseBadge: null,
+    specs: {},
     comments: [],
     provenance: {
       source: url.includes('codecanyon.net') || url.includes('themeforest.net') || url.includes('envato.com') ? 'envato_api_and_public' : 'generic_web',

@@ -312,14 +312,46 @@ function buildRespectfulDraftMessage(
  */
 export function detectOpportunitiesFromRecurringComplaints(
   recurringComplaints: RecurringComplaintGroup[],
-  myProduct: ExtractedProductData
+  myProduct: ExtractedProductData,
+  allCompetitors?: ExtractedProductData[]
 ): OpportunityRecord[] {
   const myName = myProduct.productName || 'Our Product'
   const opportunities: OpportunityRecord[] = []
 
+  // Identify sales leader competitor if available
+  let salesLeaderComp: ExtractedProductData | null = null
+  let maxSales = -1
+  for (const c of allCompetitors || []) {
+    const s = c.envatoSales?.current_total_sales ?? 0
+    if (s > maxSales) {
+      maxSales = s
+      salesLeaderComp = c
+    }
+  }
+  const salesLeaderName = salesLeaderComp?.productName || ''
+  const totalCompetitors = allCompetitors && allCompetitors.length > 0
+    ? allCompetitors.length
+    : Math.max(1, new Set(recurringComplaints.map((c) => c.competitor_name)).size)
+
   for (let i = 0; i < recurringComplaints.length; i++) {
     const complaint = recurringComplaints[i]
     const issueName = complaint.semantic_issue || complaint.complaint_category
+
+    // Multi-competitor shared weakness check
+    const affectedCompetitors = Array.from(
+      new Set(
+        recurringComplaints
+          .filter(
+            (c) =>
+              c.complaint_category === complaint.complaint_category ||
+              (complaint.semantic_issue && c.semantic_issue === complaint.semantic_issue)
+          )
+          .map((c) => c.competitor_name)
+      )
+    )
+    const sharedCount = affectedCompetitors.length
+    const isSharedWeakness = sharedCount > 1
+    const isSalesLeaderAffected = Boolean(salesLeaderName && affectedCompetitors.includes(salesLeaderName))
 
     // Match verified feature in our product (prioritizing semantic issue label)
     const match = findVerifiedMatchingFeature(
@@ -329,19 +361,29 @@ export function detectOpportunitiesFromRecurringComplaints(
     )
     const hasMatchingFeature = match !== null
     const matchingFeature = match ? match.feature : 'No verified matching feature found.'
-    const whyRelevant = match
+
+    let whyRelevant = match
       ? match.whyRelevant
       : `Recurring issue "${issueName}" on ${complaint.competitor_name} (${complaint.mention_count} public mentions), but our listing does not explicitly advertise a verified matching feature.`
 
+    if (isSharedWeakness) {
+      const leaderNote = isSalesLeaderAffected ? ` Including sales leader ${salesLeaderName}.` : ''
+      whyRelevant += ` — Shared market weakness across ${sharedCount}/${totalCompetitors} competitors (${affectedCompetitors.join(', ')}).${leaderNote}`
+    }
+
     // Label value proposition clearly as a possible improvement, not a guaranteed lost sales cause
     const isSug = Boolean(complaint.is_suggestive)
-    const valueProposition = match
+    let valueProposition = match
       ? isSug
         ? `Customer Demand Opportunity: Highlighting ${matchingFeature} in marketing or docs directly fulfills customer interest in ${issueName.toLowerCase()} identified on ${complaint.competitor_name}. This may represent an opportunity to differentiate our product.`
         : `Possible improvement: Highlighting ${matchingFeature} in product documentation and marketing materials may attract buyers frustrated with ${issueName.toLowerCase()} on ${complaint.competitor_name}. This may represent an opportunity to differentiate our product.`
       : isSug
       ? `Feature Demand: Customer suggestion on ${complaint.competitor_name} indicates active market demand for ${issueName.toLowerCase()}.`
       : `Possible improvement: Evaluating customer demand for ${issueName.toLowerCase()} could represent a potential product enhancement opportunity.`
+
+    if (isSharedWeakness) {
+      valueProposition += ` (Shared across ${sharedCount}/${totalCompetitors} competitors).`
+    }
 
     const draftMessage = buildRespectfulDraftMessage(
       issueName,
@@ -369,6 +411,10 @@ export function detectOpportunitiesFromRecurringComplaints(
       confidence_level: complaint.confidence_level,
       status: 'New',
       created_at: new Date().toISOString(),
+      shared_competitors_count: sharedCount,
+      shared_competitors: affectedCompetitors,
+      is_shared_market_weakness: isSharedWeakness,
+      highest_sales_competitor_affected: isSalesLeaderAffected,
     })
   }
 

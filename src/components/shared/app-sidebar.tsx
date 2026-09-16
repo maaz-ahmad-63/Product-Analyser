@@ -135,10 +135,20 @@ export function AppSidebar({ collapsed: controlledCollapsed, onToggle }: AppSide
     'Sales & Pricing': currentProjectData?.comparison?.pricingDifferences?.length
       ? String(currentProjectData.comparison.pricingDifferences.length)
       : undefined,
-    'Reviews & Ratings': currentProjectData?.comments_analysis?.total_analyzed
+    'Reviews & Ratings': (() => {
+      const myReviews = currentProjectData?.my_product?.envatoSales?.review_count ?? currentProjectData?.my_product?.envatoSales?.rating_count ?? 0
+      const compReviews = (currentProjectData?.competitors_data || []).reduce(
+        (acc: number, c: any) => acc + (c.envatoSales?.review_count ?? c.envatoSales?.rating_count ?? 0),
+        0
+      )
+      const total = myReviews + compReviews
+      return total > 0 ? String(total) : undefined
+    })(),
+    'Comments & Sentiment': currentProjectData?.comments_analysis?.total_analyzed
       ? String(currentProjectData.comments_analysis.total_analyzed)
-      : undefined,
-    'Comments & Sentiment': currentProjectData?.comments_analysis?.clusters?.length
+      : currentProjectData?.comments_analysis?.all_comments?.length
+      ? String(currentProjectData.comments_analysis.all_comments.length)
+      : currentProjectData?.comments_analysis?.clusters?.length
       ? String(currentProjectData.comments_analysis.clusters.length)
       : undefined,
     'Opportunities & Leads': currentProjectData?.opportunities?.length

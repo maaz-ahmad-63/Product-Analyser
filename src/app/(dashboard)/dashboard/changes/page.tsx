@@ -128,12 +128,19 @@ export default function CompetitorChangesPage() {
   const [blockSearch, setBlockSearch] = useState<string>('')
   const [blockCategoryFilter, setBlockCategoryFilter] = useState<string>('ALL')
 
-  // Escape key & body scroll lock for modal
+  // Amazon Product Attributes modal state (Phase 1)
+  const [showAttributeModal, setShowAttributeModal] = useState<boolean>(false)
+  const [attributeSearch, setAttributeSearch] = useState<string>('')
+
+  // Escape key & body scroll lock for modals
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setActiveBlockModal(null)
+      if (e.key === 'Escape') {
+        setActiveBlockModal(null)
+        setShowAttributeModal(false)
+      }
     }
-    if (activeBlockModal) {
+    if (activeBlockModal || showAttributeModal) {
       window.addEventListener('keydown', handleKeyDown)
       document.body.style.overflow = 'hidden'
     } else {
@@ -143,18 +150,40 @@ export default function CompetitorChangesPage() {
       window.removeEventListener('keydown', handleKeyDown)
       document.body.style.overflow = 'unset'
     }
-  }, [activeBlockModal])
+  }, [activeBlockModal, showAttributeModal])
 
   const myProduct = currentProjectData?.my_product || {}
   const competitors: any[] = currentProjectData?.competitors_data || []
   const commentsAnalysis = currentProjectData?.comments_analysis
+
+  // Platform check: strictly gate Amazon features
+  const isAmazonWorkspace =
+    currentProjectMeta?.platform === 'amazon' ||
+    Boolean(myProduct.url && /amazon\.[a-z.]+/i.test(myProduct.url))
 
   // Build the Feature Battle analysis memoized
   const featureBattle = useMemo(() => {
     return buildFeatureBattle(myProduct, competitors, commentsAnalysis)
   }, [myProduct, competitors, commentsAnalysis])
 
-  const { summary, matrix, categories, totalMarketFeatures } = featureBattle
+  const { summary, matrix, categories, totalMarketFeatures, attributeSignals } = featureBattle
+  const hasAttributes = Boolean(isAmazonWorkspace && attributeSignals && attributeSignals.totalObservedAttributes > 0)
+  const featureCoveragePct = totalMarketFeatures > 0
+    ? Math.round(((summary.featuresYouLead.length + summary.parity.length) / totalMarketFeatures) * 100)
+    : 0
+
+  // Filtered attributes for Amazon modal
+  const filteredAttributes = useMemo(() => {
+    if (!attributeSignals?.matrix) return []
+    if (!attributeSearch.trim()) return attributeSignals.matrix
+    const q = attributeSearch.toLowerCase().trim()
+    return attributeSignals.matrix.filter((row) => {
+      const matchName = row.name.toLowerCase().includes(q)
+      const matchMyVal = row.myValue.toLowerCase().includes(q)
+      const matchCompVal = Object.values(row.competitors).some((v) => v.toLowerCase().includes(q))
+      return matchName || matchMyVal || matchCompVal
+    })
+  }, [attributeSignals, attributeSearch])
 
   // Data for the active At-a-Glance block modal
   const modalData = useMemo(() => {
@@ -470,109 +499,202 @@ export default function CompetitorChangesPage() {
       </div>
 
       {/* ========================================================================= */}
-      {/* 1. AT A GLANCE */}
+      {/* 1. AT A GLANCE / KEY SIGNALS */}
       {/* ========================================================================= */}
       <div className="space-y-2">
         <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground block">
-          1. At a Glance
+          {hasAttributes ? '1. Key Signals' : '1. At a Glance'}
         </span>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Your Advantages */}
-          <Card
-            onClick={() => {
-              setActiveBlockModal('advantages')
-              setBlockSearch('')
-              setBlockCategoryFilter('ALL')
-            }}
-            className="border-emerald-500/30 bg-emerald-500/5 p-3.5 cursor-pointer hover:border-emerald-500/60 hover:bg-emerald-500/10 transition-all group"
-          >
-            <div className="flex items-center justify-between text-[10px] text-emerald-400 uppercase font-bold tracking-wider">
-              <span className="flex items-center gap-1">
-                <Award className="h-3 w-3" />
-                <span>Your Advantages</span>
+        {hasAttributes ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* Feature Coverage */}
+            <Card
+              onClick={() => {
+                setActiveBlockModal('parity')
+                setBlockSearch('')
+                setBlockCategoryFilter('ALL')
+              }}
+              className="border-border bg-card p-3.5 cursor-pointer hover:border-border/80 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
+                <span>Feature Coverage</span>
+                <span className="text-[9px] text-muted-foreground/80 font-normal group-hover:underline">List →</span>
+              </div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {featureCoveragePct}%
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                {summary.featuresYouLead.length + summary.parity.length} of {totalMarketFeatures} features matched
               </span>
-              <span className="text-[9px] text-emerald-400/80 font-normal group-hover:underline">List →</span>
-            </div>
-            <div className="text-2xl font-bold text-emerald-400 mt-1">
-              {summary.featuresYouLead.length}
-            </div>
-            <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Capabilities where you lead
-            </span>
-          </Card>
+            </Card>
 
-          {/* Shared Capabilities */}
-          <Card
-            onClick={() => {
-              setActiveBlockModal('parity')
-              setBlockSearch('')
-              setBlockCategoryFilter('ALL')
-            }}
-            className="border-blue-500/30 bg-blue-500/5 p-3.5 cursor-pointer hover:border-blue-500/60 hover:bg-blue-500/10 transition-all group"
-          >
-            <div className="flex items-center justify-between text-[10px] text-blue-400 uppercase font-bold tracking-wider">
-              <span className="flex items-center gap-1">
-                <CheckCircle2 className="h-3 w-3" />
-                <span>Shared Capabilities</span>
+            {/* Attribute Coverage */}
+            <Card
+              onClick={() => {
+                setShowAttributeModal(true)
+                setAttributeSearch('')
+              }}
+              className="border-primary/40 bg-primary/5 p-3.5 cursor-pointer hover:border-primary/70 hover:bg-primary/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-primary uppercase font-bold tracking-wider">
+                <span>Attribute Coverage</span>
+                <span className="text-[9px] text-primary/80 font-normal group-hover:underline">Details →</span>
+              </div>
+              <div className="text-2xl font-bold text-primary mt-1">
+                {attributeSignals?.isComparable && attributeSignals.attributeCoveragePercentage !== null
+                  ? `${attributeSignals.attributeCoveragePercentage}%`
+                  : 'Not available'}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                {attributeSignals?.isComparable
+                  ? `${attributeSignals?.myObservedCount ?? 0} of ${attributeSignals?.totalObservedAttributes ?? 0} specs observed`
+                  : 'Comparable public specifications were not observed on your listing.'}
               </span>
-              <span className="text-[9px] text-blue-400/80 font-normal group-hover:underline">List →</span>
-            </div>
-            <div className="text-2xl font-bold text-blue-400 mt-1">
-              {summary.parity.length}
-            </div>
-            <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Matched baseline features
-            </span>
-          </Card>
+            </Card>
 
-          {/* Important Competitive Gaps */}
-          <Card
-            onClick={() => {
-              setActiveBlockModal('gaps')
-              setBlockSearch('')
-              setBlockCategoryFilter('ALL')
-            }}
-            className="border-rose-500/30 bg-rose-500/5 p-3.5 cursor-pointer hover:border-rose-500/60 hover:bg-rose-500/10 transition-all group"
-          >
-            <div className="flex items-center justify-between text-[10px] text-rose-400 uppercase font-bold tracking-wider">
-              <span className="flex items-center gap-1">
-                <TrendingDown className="h-3 w-3" />
-                <span>Competitive Gaps</span>
+            {/* Competitor Gaps */}
+            <Card
+              onClick={() => {
+                setShowAttributeModal(true)
+                setAttributeSearch('')
+              }}
+              className="border-rose-500/30 bg-rose-500/5 p-3.5 cursor-pointer hover:border-rose-500/60 hover:bg-rose-500/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-rose-400 uppercase font-bold tracking-wider">
+                <span>Competitor Gaps</span>
+                <span className="text-[9px] text-rose-400/80 font-normal group-hover:underline">Explore →</span>
+              </div>
+              <div className="text-2xl font-bold text-rose-400 mt-1">
+                {attributeSignals?.competitorGapsCount ?? 0}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Attributes rivals specify
               </span>
-              <span className="text-[9px] text-rose-400/80 font-normal group-hover:underline">List →</span>
-            </div>
-            <div className="text-2xl font-bold text-rose-400 mt-1">
-              {summary.featuresCompetitorsLead.length}
-            </div>
-            <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Capabilities rivals offer
-            </span>
-          </Card>
+            </Card>
 
-          {/* Customer-Backed Gaps */}
-          <Card
-            onClick={() => {
-              setActiveBlockModal('customer_gaps')
-              setBlockSearch('')
-              setBlockCategoryFilter('ALL')
-            }}
-            className="border-amber-500/30 bg-amber-500/5 p-3.5 cursor-pointer hover:border-amber-500/60 hover:bg-amber-500/10 transition-all group"
-          >
-            <div className="flex items-center justify-between text-[10px] text-amber-400 uppercase font-bold tracking-wider">
-              <span className="flex items-center gap-1">
-                <Flame className="h-3 w-3" />
-                <span>Customer-Backed Gaps</span>
+            {/* Customer-Backed Gaps */}
+            <Card
+              onClick={() => {
+                setActiveBlockModal('customer_gaps')
+                setBlockSearch('')
+                setBlockCategoryFilter('ALL')
+              }}
+              className="border-amber-500/30 bg-amber-500/5 p-3.5 cursor-pointer hover:border-amber-500/60 hover:bg-amber-500/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-amber-400 uppercase font-bold tracking-wider">
+                <span className="flex items-center gap-1">
+                  <Flame className="h-3 w-3" />
+                  <span>Customer Gaps</span>
+                </span>
+                <span className="text-[9px] text-amber-400/80 font-normal group-hover:underline">List →</span>
+              </div>
+              <div className="text-2xl font-bold text-amber-400 mt-1">
+                {summary.highValueGaps.length}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Gaps buyers ask for in reviews
               </span>
-              <span className="text-[9px] text-amber-400/80 font-normal group-hover:underline">List →</span>
-            </div>
-            <div className="text-2xl font-bold text-amber-400 mt-1">
-              {summary.highValueGaps.length}
-            </div>
-            <span className="text-[10px] text-muted-foreground mt-0.5 block">
-              Gaps customers are asking for
-            </span>
-          </Card>
-        </div>
+            </Card>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* Your Advantages */}
+            <Card
+              onClick={() => {
+                setActiveBlockModal('advantages')
+                setBlockSearch('')
+                setBlockCategoryFilter('ALL')
+              }}
+              className="border-emerald-500/30 bg-emerald-500/5 p-3.5 cursor-pointer hover:border-emerald-500/60 hover:bg-emerald-500/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-emerald-400 uppercase font-bold tracking-wider">
+                <span className="flex items-center gap-1">
+                  <Award className="h-3 w-3" />
+                  <span>Your Advantages</span>
+                </span>
+                <span className="text-[9px] text-emerald-400/80 font-normal group-hover:underline">List →</span>
+              </div>
+              <div className="text-2xl font-bold text-emerald-400 mt-1">
+                {summary.featuresYouLead.length}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Capabilities where you lead
+              </span>
+            </Card>
+
+            {/* Shared Capabilities */}
+            <Card
+              onClick={() => {
+                setActiveBlockModal('parity')
+                setBlockSearch('')
+                setBlockCategoryFilter('ALL')
+              }}
+              className="border-blue-500/30 bg-blue-500/5 p-3.5 cursor-pointer hover:border-blue-500/60 hover:bg-blue-500/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-blue-400 uppercase font-bold tracking-wider">
+                <span className="flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" />
+                  <span>Shared Capabilities</span>
+                </span>
+                <span className="text-[9px] text-blue-400/80 font-normal group-hover:underline">List →</span>
+              </div>
+              <div className="text-2xl font-bold text-blue-400 mt-1">
+                {summary.parity.length}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Matched baseline features
+              </span>
+            </Card>
+
+            {/* Important Competitive Gaps */}
+            <Card
+              onClick={() => {
+                setActiveBlockModal('gaps')
+                setBlockSearch('')
+                setBlockCategoryFilter('ALL')
+              }}
+              className="border-rose-500/30 bg-rose-500/5 p-3.5 cursor-pointer hover:border-rose-500/60 hover:bg-rose-500/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-rose-400 uppercase font-bold tracking-wider">
+                <span className="flex items-center gap-1">
+                  <TrendingDown className="h-3 w-3" />
+                  <span>Competitive Gaps</span>
+                </span>
+                <span className="text-[9px] text-rose-400/80 font-normal group-hover:underline">List →</span>
+              </div>
+              <div className="text-2xl font-bold text-rose-400 mt-1">
+                {summary.featuresCompetitorsLead.length}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Capabilities rivals offer
+              </span>
+            </Card>
+
+            {/* Customer-Backed Gaps */}
+            <Card
+              onClick={() => {
+                setActiveBlockModal('customer_gaps')
+                setBlockSearch('')
+                setBlockCategoryFilter('ALL')
+              }}
+              className="border-amber-500/30 bg-amber-500/5 p-3.5 cursor-pointer hover:border-amber-500/60 hover:bg-amber-500/10 transition-all group"
+            >
+              <div className="flex items-center justify-between text-[10px] text-amber-400 uppercase font-bold tracking-wider">
+                <span className="flex items-center gap-1">
+                  <Flame className="h-3 w-3" />
+                  <span>Customer-Backed Gaps</span>
+                </span>
+                <span className="text-[9px] text-amber-400/80 font-normal group-hover:underline">List →</span>
+              </div>
+              <div className="text-2xl font-bold text-amber-400 mt-1">
+                {summary.highValueGaps.length}
+              </div>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Gaps customers are asking for
+              </span>
+            </Card>
+          </div>
+        )}
       </div>
 
       {/* ========================================================================= */}
@@ -583,7 +705,7 @@ export default function CompetitorChangesPage() {
           <div className="p-2.5 rounded-xl bg-primary/20 text-primary shrink-0 mt-0.5">
             <Zap className="h-5 w-5" />
           </div>
-          <div className="space-y-1.5 flex-1">
+          <div className="space-y-2 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[10px] uppercase font-bold tracking-wider text-primary">
                 2. Main Competitive Result
@@ -592,9 +714,43 @@ export default function CompetitorChangesPage() {
                 WHAT WE FOUND
               </Badge>
             </div>
-            <p className="text-sm font-semibold text-foreground leading-relaxed">
+            {hasAttributes && attributeSignals?.whatWeFound && (
+              <p className="text-sm font-semibold text-foreground leading-relaxed">
+                &ldquo;{attributeSignals.whatWeFound}&rdquo;
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground leading-relaxed">
               {whatWeFoundNarrative}
             </p>
+            {hasAttributes && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => {
+                    setShowAttributeModal(true)
+                    setAttributeSearch('')
+                  }}
+                  className="gap-1.5 text-xs h-7 px-3 bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>Explore Attribute Differences ({attributeSignals?.matrix.length || 0})</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setActiveBlockModal('gaps')
+                    setBlockSearch('')
+                    setBlockCategoryFilter('ALL')
+                  }}
+                  className="gap-1.5 text-xs h-7 px-3"
+                >
+                  <TrendingDown className="h-3 w-3 text-rose-400" />
+                  <span>Explore Feature Gaps ({summary.featuresCompetitorsLead.length})</span>
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </Card>
@@ -941,7 +1097,9 @@ export default function CompetitorChangesPage() {
                                   </Badge>
                                 )}
                               </div>
-                              <span className="text-[10px] text-muted-foreground block">{row.category}</span>
+                              <span className="text-[10px] text-muted-foreground block">
+                                {row.category} · <span className="text-foreground/80 font-medium">{row.customerImportance.competitorsOfferingCount}/{row.customerImportance.totalCompetitorsCount} rivals offer this</span>
+                              </span>
                             </div>
                           </td>
 
@@ -1292,6 +1450,190 @@ export default function CompetitorChangesPage() {
                 className="text-xs"
               >
                 Close List
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 8. AMAZON PRODUCT ATTRIBUTES MODAL (Phase 1) */}
+      {/* ========================================================================= */}
+      {showAttributeModal && attributeSignals && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in-0"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowAttributeModal(false)
+          }}
+        >
+          <div className="bg-card border border-border rounded-2xl w-full max-w-5xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-border/80 flex items-start justify-between gap-3 bg-muted/20">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-[10px] font-bold tracking-wider text-primary border-primary/30 bg-primary/10">
+                    AMAZON ATTRIBUTES
+                  </Badge>
+                  <span className="text-xs text-muted-foreground font-mono">
+                    {attributeSignals.matrix.length} Observed Specifications
+                  </span>
+                  <Badge variant="secondary" className="text-[10px]">
+                    {attributeSignals.attributeCoveragePercentage}% Coverage
+                  </Badge>
+                </div>
+                <h2 className="text-lg sm:text-xl font-bold text-foreground">
+                  Product Attributes & Technical Specifications
+                </h2>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  Side-by-side comparison of public specifications observed across your product and all added competitors. Missing attributes strictly display as &quot;Not available&quot;.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowAttributeModal(false)}
+                className="h-8 w-8 p-0 rounded-full text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Filter Toolbar */}
+            <div className="p-3 sm:p-4 border-b border-border/60 bg-muted/10 flex items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="Filter attributes (e.g. Dimensions, Material, Capacity, Battery, Storage, Color)..."
+                  value={attributeSearch}
+                  onChange={(e) => setAttributeSearch(e.target.value)}
+                  className="pl-8 text-xs h-8 bg-card"
+                />
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
+                <span className="font-semibold text-rose-400">{attributeSignals.competitorGapsCount}</span> gaps &bull;
+                <span className="font-semibold text-emerald-400">{attributeSignals.myObservedCount}</span> specified
+              </div>
+            </div>
+
+            {/* Attributes List */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+              {filteredAttributes.length === 0 ? (
+                <div className="py-12 text-center text-xs text-muted-foreground">
+                  No attributes matched &quot;{attributeSearch}&quot;.
+                </div>
+              ) : (
+                filteredAttributes.map((row, idx) => {
+                  const isGap = row.status === 'gap'
+                  const isAdv = row.status === 'advantage'
+                  const isDiff = row.status === 'different'
+
+                  return (
+                    <Card
+                      key={idx}
+                      className={`p-3.5 transition-colors ${
+                        isGap
+                          ? 'border-rose-500/30 bg-rose-500/5'
+                          : isAdv
+                          ? 'border-emerald-500/30 bg-emerald-500/5'
+                          : 'border-border bg-card'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-foreground capitalize">
+                            {row.name}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] uppercase font-bold py-0 px-1.5 ${
+                              isGap
+                                ? 'text-rose-400 border-rose-500/40 bg-rose-500/10'
+                                : isAdv
+                                ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                                : isDiff
+                                ? 'text-blue-400 border-blue-500/40 bg-blue-500/10'
+                                : 'text-muted-foreground border-border bg-muted/20'
+                            }`}
+                          >
+                            {isGap ? 'Competitor Gap' : isAdv ? 'Your Advantage' : isDiff ? 'Value Difference' : 'Shared Specification'}
+                          </Badge>
+                          <Badge variant="secondary" className="text-[9px] py-0 px-1.5">
+                            {row.penetrationRatio} competitors
+                          </Badge>
+                          {row.kind && (
+                            <Badge
+                              variant="outline"
+                              className={`text-[9px] py-0 px-1.5 ${
+                                row.kind === 'service_claim'
+                                  ? 'border-amber-500/40 text-amber-400 bg-amber-500/5'
+                                  : 'border-border text-muted-foreground bg-muted/10'
+                              }`}
+                            >
+                              {row.kind === 'service_claim' ? 'Service Claim' : 'Technical Spec'}
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-muted-foreground italic">
+                          {row.conclusion}
+                        </span>
+                      </div>
+
+                      {/* Values Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 pt-2.5">
+                        {/* Target Product */}
+                        <div className="p-2 rounded-md bg-muted/30 border border-border/50">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground block mb-0.5 truncate">
+                            {myProductName} (You)
+                          </span>
+                          {row.myValue === 'Not available' ? (
+                            <span className="text-xs text-muted-foreground italic">
+                              Not available
+                            </span>
+                          ) : (
+                            <span className="text-xs font-semibold text-foreground break-words">
+                              {row.myValue}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Competitors */}
+                        {Object.entries(row.competitors).map(([compName, val], cIdx) => (
+                          <div key={cIdx} className="p-2 rounded-md bg-muted/20 border border-border/40">
+                            <span className="text-[10px] uppercase font-bold text-muted-foreground block mb-0.5 truncate" title={compName}>
+                              {compName}
+                            </span>
+                            {val === 'Not available' ? (
+                              <span className="text-xs text-muted-foreground/70 italic">
+                                Not available
+                              </span>
+                            ) : (
+                              <span className="text-xs font-medium text-foreground break-words">
+                                {val}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 sm:p-4 border-t border-border/80 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Grounded strictly in public Amazon product details and specification tables.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAttributeModal(false)}
+                className="text-xs"
+              >
+                Close Attributes
               </Button>
             </div>
           </div>
