@@ -258,6 +258,45 @@ async function runStealthScraper(url: string): Promise<StealthScraperOutput | nu
   })
 }
 
+/**
+ * Amazon-specific scraper using crawl4ai (superior anti-bot bypass).
+ * Replaces Playwright-based scraping for amazon.com/amazon.in URLs.
+ */
+async function runAmazonScraper(url: string): Promise<StealthScraperOutput | null> {
+  const scriptPath = path.join(process.cwd(), 'src', 'services', 'website-analyzer', 'amazon_scraper.py')
+  return new Promise((resolve) => {
+    execFile(
+      'python3',
+      [scriptPath, url],
+      { timeout: 60000, maxBuffer: 15 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          console.error(`Amazon scraper (crawl4ai) error for ${url}:`, err.message, stderr?.slice(0, 300))
+          resolve(null)
+          return
+        }
+        try {
+          const parsed = JSON.parse(stdout.trim()) as StealthScraperOutput
+          if (!parsed.finalUrl || parsed.finalUrl === 'about:blank') {
+            parsed.finalUrl = url
+          }
+          // Accept result if we got at least a title, product name, or price
+          if (parsed.productName || parsed.title || parsed.priceText || (parsed.features && parsed.features.length > 0)) {
+            parsed.success = true
+            resolve(parsed)
+          } else {
+            console.warn(`Amazon scraper returned empty data for ${url}, falling back.`)
+            resolve(null)
+          }
+        } catch (parseErr) {
+          console.error(`Error parsing Amazon scraper output for ${url}:`, parseErr)
+          resolve(null)
+        }
+      }
+    )
+  })
+}
+
 export function normalizeUrl(rawUrl: string): string {
   // Strip trailing punctuation (periods, commas, semicolons) that users accidentally paste
   let trimmed = rawUrl.trim().replace(/[.,;]+$/, '').trim()
@@ -266,6 +305,17 @@ export function normalizeUrl(rawUrl: string): string {
   }
   try {
     const parsed = new URL(trimmed)
+
+    // For Amazon URLs: strip referral tracking params and session IDs.
+    // Keep only the canonical /dp/ASIN path — ref= params cause bot-detection.
+    if (parsed.hostname.includes('amazon.') || parsed.hostname.includes('amzn.')) {
+      // Extract ASIN from path like /Product-Name/dp/B0XXXXXX/ref=...
+      const asinMatch = parsed.pathname.match(/\/dp\/([A-Z0-9]{10})/i)
+      if (asinMatch) {
+        return `${parsed.protocol}//${parsed.host}/dp/${asinMatch[1]}`
+      }
+    }
+
     // Remove trailing slash for consistency
     return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, '')}`
   } catch {
@@ -310,14 +360,17 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
   let finalUrl = normalized
   let stealthResult: StealthScraperOutput | null = null
 
+  const isAmazonDomain =
+    normalized.includes('amazon.') ||
+    normalized.includes('amzn.')
+
   const isProtectedDomain =
     normalized.includes('codecanyon.net') ||
     normalized.includes('themeforest.net') ||
     normalized.includes('envato.com') ||
-    normalized.includes('amazon.') ||
-    normalized.includes('amzn.')
+    isAmazonDomain
 
-  // 1. Fetch Main Landing Page (Use official Envato API for Envato items, or stealth/fetch)
+  // 1. Fetch Main Landing Page (Use official Envato API for Envato items, or crawl4ai/stealth/fetch)
   if (isProtectedDomain) {
     const envatoItemId = extractEnvatoItemId(normalized)
     if (envatoItemId) {
@@ -328,10 +381,22 @@ export async function collectWebsiteData(inputUrl: string): Promise<ExtractedPro
       }
     }
     if (!mainHtml) {
-      stealthResult = await runStealthScraper(normalized)
-      if (stealthResult && stealthResult.html) {
-        mainHtml = stealthResult.html
-        finalUrl = stealthResult.finalUrl || normalized
+      if (isAmazonDomain) {
+        // Use crawl4ai-based Amazon scraper first (better anti-bot bypass)
+        console.log(`[collector] Using crawl4ai Amazon scraper for: ${normalized}`)
+        stealthResult = await runAmazonScraper(normalized)
+        if (stealthResult && (stealthResult.html || stealthResult.productName || stealthResult.title)) {
+          mainHtml = stealthResult.html || `<html><body>${stealthResult.productName || stealthResult.title}</body></html>`
+          finalUrl = stealthResult.finalUrl || normalized
+        }
+      }
+      // Fallback: use Playwright stealth scraper (for non-Amazon or if crawl4ai failed)
+      if (!mainHtml) {
+        stealthResult = await runStealthScraper(normalized)
+        if (stealthResult && stealthResult.html) {
+          mainHtml = stealthResult.html
+          finalUrl = stealthResult.finalUrl || normalized
+        }
       }
     }
   }
