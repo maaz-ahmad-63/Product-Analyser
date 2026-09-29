@@ -6,6 +6,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { activityScheduler } from '@/services/activity-monitor/scheduler'
 
+// Allow Vercel Serverless Function up to 60 seconds to finish scraping all competitors
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
