@@ -142,6 +142,10 @@ export default function MySaaSPage() {
   const [timelineOpen, setTimelineOpen] = useState(true)
   const [mounted, setMounted] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [showDailyLogsModal, setShowDailyLogsModal] = useState(false)
+  const [dailyLogsData, setDailyLogsData] = useState<any>(null)
+  const [dailyLogsLoading, setDailyLogsLoading] = useState(false)
+  const [dailyLogsProduct, setDailyLogsProduct] = useState<string>('__own__')
 
   const handleTimeRangeChange = (range: 'today' | '7d' | '30d' | 'all') => {
     setTimeRange(range)
@@ -158,11 +162,31 @@ export default function MySaaSPage() {
       if (e.key === 'Escape') {
         setEventsModalOpen(false)
         setShowBsrModal(false)
+        setShowDailyLogsModal(false)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+
+  async function openDailyLogs() {
+    if (!currentProjectId) return
+    setShowDailyLogsModal(true)
+    if (dailyLogsData) return // already loaded — keep cache
+    setDailyLogsLoading(true)
+    try {
+      const res = await fetch(`/api/analyses/${currentProjectId}/daily-sales`)
+      if (res.ok) {
+        const json = await res.json()
+        setDailyLogsData(json)
+        setDailyLogsProduct('__own__')
+      }
+    } catch (e) {
+      console.error('[DailyLogs] fetch error', e)
+    } finally {
+      setDailyLogsLoading(false)
+    }
+  }
 
   // ── Derived data (with safe fallbacks so all hooks run before any early return) ──
   const myProduct = currentProjectData?.my_product || {}
@@ -1166,6 +1190,16 @@ export default function MySaaSPage() {
                   <span>Full Event Modal ({allMarketplaceEvents.length})</span>
                 </Button>
                 <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openDailyLogs}
+                  className="h-7 text-xs gap-1.5 border-violet-500/40 bg-violet-500/5 text-violet-400 hover:bg-violet-500/15 hover:text-violet-300"
+                  title="View actual day-by-day records saved in your database"
+                >
+                  <Calendar className="h-3.5 w-3.5" />
+                  <span>Daily DB Logs</span>
+                </Button>
+                <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setTimelineOpen((o) => !o)}
@@ -1175,6 +1209,7 @@ export default function MySaaSPage() {
                   <svg xmlns="http://www.w3.org/2000/svg" className={`h-3.5 w-3.5 transition-transform duration-200 ${timelineOpen ? 'rotate-180' : 'rotate-0'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
                 </Button>
               </div>
+
             </div>
 
             {/* Event Type Filter Pills */}
@@ -1921,6 +1956,7 @@ export default function MySaaSPage() {
               ))}
             </div>
 
+
             {/* Modal Footer */}
             <div className="p-3 sm:p-4 border-t border-border/80 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
@@ -1935,6 +1971,304 @@ export default function MySaaSPage() {
                 Close BSR Details
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* DAILY DB LOGS MODAL                                    */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {showDailyLogsModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Daily Database Logs"
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setShowDailyLogsModal(false)}
+          />
+
+          {/* Panel */}
+          <div className="relative z-10 w-full max-w-5xl max-h-[90vh] flex flex-col rounded-xl border border-border/80 bg-background shadow-2xl overflow-hidden">
+
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 p-4 sm:p-5 border-b border-border/80 bg-muted/20 shrink-0">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-violet-500/20 text-violet-400">
+                    <Calendar className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-bold text-base text-foreground">Daily Database Logs</h2>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 border border-violet-500/30 font-mono uppercase tracking-wide">Live DB</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1 ml-9">
+                  Actual rows saved in your database per day — this is what the Vercel Cron collects nightly.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDailyLogsModal(false)}
+                className="p-1.5 rounded-lg hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                aria-label="Close modal"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Loading */}
+            {dailyLogsLoading && (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 py-16">
+                <div className="h-8 w-8 rounded-full border-2 border-violet-500/30 border-t-violet-500 animate-spin" />
+                <p className="text-sm text-muted-foreground">Fetching database records…</p>
+              </div>
+            )}
+
+            {/* Content */}
+            {!dailyLogsLoading && dailyLogsData && (() => {
+              const dlProducts: any[] = dailyLogsData.products || []
+              const dlOwn = dlProducts.find((p: any) => p.isOwnProduct)
+              const dlComps = dlProducts.filter((p: any) => !p.isOwnProduct)
+              const dlSelected = dlProducts.find((p: any) =>
+                dailyLogsProduct === '__own__' ? p.isOwnProduct : p.url === dailyLogsProduct
+              ) || dlOwn
+
+              return (
+                <>
+                  {/* Product Tabs */}
+                  <div className="flex items-center gap-0.5 px-4 pt-3 pb-0 overflow-x-auto scrollbar-none shrink-0 border-b border-border/40">
+                    {dlOwn && (
+                      <button
+                        onClick={() => setDailyLogsProduct('__own__')}
+                        className={`px-3 py-2 rounded-t-lg text-xs font-medium transition-all shrink-0 border-b-2 -mb-px ${
+                          dailyLogsProduct === '__own__'
+                            ? 'border-violet-500 text-violet-300 bg-violet-500/10'
+                            : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[10px] px-1.5 rounded bg-violet-500/20 text-violet-400 font-bold uppercase">You</span>
+                          {(dlOwn.productName || 'Your Product').split('–')[0].split('-')[0].trim().slice(0, 22)}
+                          <span className="text-[10px] font-mono text-muted-foreground">{dlOwn.days_with_data}d</span>
+                        </span>
+                      </button>
+                    )}
+                    {dlComps.map((p: any) => (
+                      <button
+                        key={p.url}
+                        onClick={() => setDailyLogsProduct(p.url)}
+                        className={`px-3 py-2 rounded-t-lg text-xs font-medium transition-all shrink-0 border-b-2 -mb-px ${
+                          dailyLogsProduct === p.url
+                            ? 'border-emerald-500 text-emerald-300 bg-emerald-500/10'
+                            : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          {(p.productName || p.url).split('–')[0].split('-')[0].trim().slice(0, 22)}
+                          <span className="text-[10px] font-mono text-muted-foreground">{p.days_with_data}d</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Summary bar */}
+                  {dlSelected && (
+                    <div className="flex flex-wrap items-center gap-4 px-4 py-2.5 bg-muted/10 border-b border-border/40 text-xs shrink-0">
+                      <span className="text-muted-foreground">
+                        <span className="font-bold text-foreground">{dlSelected.total_snapshots}</span> total DB snapshots
+                      </span>
+                      <span className="text-muted-foreground">
+                        <span className="font-bold text-foreground">{dlSelected.days_with_data}</span> days with data
+                      </span>
+                      {dlSelected.first_ever && (
+                        <span className="text-muted-foreground">
+                          First collected: <span className="font-bold text-foreground">{dlSelected.first_ever.split('T')[0]}</span>
+                        </span>
+                      )}
+                      {dlSelected.latest && (
+                        <span className="text-muted-foreground">
+                          Latest: <span className="font-bold text-foreground">{dlSelected.latest.split('T')[0]}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Table */}
+                  <div className="flex-1 overflow-y-auto">
+                    {dlSelected && dlSelected.days.length > 0 ? (
+                      <div className="divide-y divide-border/40">
+                        {(() => {
+                          // Inject gap rows for non-consecutive dates
+                          const rows: any[] = []
+                          const dayEntries: any[] = dlSelected.days
+                          for (let i = 0; i < dayEntries.length; i++) {
+                            rows.push({ type: 'data', entry: dayEntries[i] })
+                            if (i < dayEntries.length - 1) {
+                              const curr = new Date(dayEntries[i].date)
+                              const next = new Date(dayEntries[i + 1].date)
+                              const diffDays = Math.round((curr.getTime() - next.getTime()) / (1000 * 60 * 60 * 24))
+                              if (diffDays > 1) {
+                                rows.push({ type: 'gap', from: dayEntries[i + 1].date, to: dayEntries[i].date, days: diffDays - 1 })
+                              }
+                            }
+                          }
+                          return rows.map((row: any, idx: number) => {
+                            if (row.type === 'gap') {
+                              const fromStr = new Date(row.from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                              const toStr = new Date(row.to).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                              return (
+                                <div key={`gap-${idx}`} className="flex items-center gap-2 px-4 py-2 bg-amber-500/5 border-l-2 border-amber-500/30">
+                                  <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0" />
+                                  <span className="text-[11px] text-amber-400">
+                                    {fromStr}–{toStr}: <span className="font-semibold">{row.days}-day gap</span> — no data collected (Vercel Cron or app not triggered)
+                                  </span>
+                                </div>
+                              )
+                            }
+
+                            const e = row.entry
+                            const growth = e.daily_growth
+                            const growthColor = growth === null ? 'text-muted-foreground'
+                              : growth > 0 ? 'text-emerald-400'
+                              : growth < 0 ? 'text-red-400'
+                              : 'text-muted-foreground'
+                            const growthLabel = growth === null ? '—'
+                              : growth > 0 ? `+${growth}`
+                              : growth < 0 ? `${growth}`
+                              : '±0'
+
+                            const localDate = new Date(e.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+                            const firstTime = new Date(e.first_captured_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
+                            const lastTime = new Date(e.last_captured_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
+
+                            return (
+                              <div key={e.date} className="px-4 py-3 hover:bg-muted/10 transition-colors">
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                                  {/* Date */}
+                                  <div className="flex items-center gap-2 shrink-0 min-w-[170px]">
+                                    <div className="p-1.5 rounded-md bg-muted/40">
+                                      <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                                    </div>
+                                    <div>
+                                      <div className="text-xs font-semibold text-foreground">{localDate}</div>
+                                      <div className="text-[10px] text-muted-foreground font-mono">
+                                        {e.snapshots_saved} snapshot{e.snapshots_saved !== 1 ? 's' : ''} saved
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Sales */}
+                                  <div className="flex items-center gap-3 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[10px] uppercase font-bold text-muted-foreground">Sales</span>
+                                      <span className="text-sm font-bold text-foreground">
+                                        {e.closing_sales ?? '—'}
+                                      </span>
+                                    </div>
+                                    {e.opening_sales !== e.closing_sales && e.opening_sales !== null && (
+                                      <span className="text-xs text-muted-foreground">from {e.opening_sales}</span>
+                                    )}
+                                    <span className={`text-xs font-bold font-mono ${growthColor}`}>{growthLabel}</span>
+                                  </div>
+
+                                  {/* Price & Rating */}
+                                  <div className="flex items-center gap-4">
+                                    {e.price && (
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Price</span>
+                                        <span className="text-xs font-semibold text-foreground">{e.price}</span>
+                                      </div>
+                                    )}
+                                    {e.rating !== null && e.rating !== undefined && (
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Rating</span>
+                                        <span className="text-xs font-semibold text-amber-400">★ {e.rating}</span>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Timestamps */}
+                                  <div className="text-right shrink-0">
+                                    <div className="text-[10px] text-muted-foreground">First: <span className="font-mono text-foreground">{firstTime}</span></div>
+                                    <div className="text-[10px] text-muted-foreground">Last: <span className="font-mono text-foreground">{lastTime}</span></div>
+                                  </div>
+                                </div>
+
+                                {/* Activity events on that day */}
+                                {e.activities && e.activities.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap gap-1.5 ml-9">
+                                    {e.activities.map((act: any) => (
+                                      <span
+                                        key={act.id}
+                                        className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                                          act.impact === 'positive' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                          : act.impact === 'negative' ? 'bg-red-500/10 text-red-400 border-red-500/30'
+                                          : 'bg-muted/30 text-muted-foreground border-border/40'
+                                        }`}
+                                        title={act.title}
+                                      >
+                                        {act.title}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })
+                        })()}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-3 py-16">
+                        <div className="p-3 rounded-full bg-muted/30">
+                          <Calendar className="h-6 w-6 text-muted-foreground" />
+                        </div>
+                        <p className="text-sm font-medium text-muted-foreground">No database records for this product yet</p>
+                        <p className="text-xs text-muted-foreground max-w-xs text-center">
+                          The Vercel Cron collects data nightly at 00:00 UTC (5:30 AM IST). Click "Check Live Sales" to save a snapshot now.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="p-3 sm:p-4 border-t border-border/80 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2 shrink-0">
+                    <span className="text-xs text-muted-foreground">
+                      Source: <span className="font-mono text-foreground">envato_sales_snapshots</span> & <span className="font-mono text-foreground">product_activity_records</span> in Supabase
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setDailyLogsData(null); openDailyLogs() }}
+                        className="text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                      >
+                        <RotateCw className="h-3 w-3" />
+                        Refresh
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowDailyLogsModal(false)}
+                        className="text-xs"
+                      >
+                        Close
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )
+            })()}
+
+            {/* Error / no data */}
+            {!dailyLogsLoading && !dailyLogsData && (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 py-16">
+                <p className="text-sm text-muted-foreground">Could not load data. Please try again.</p>
+                <Button variant="outline" size="sm" onClick={openDailyLogs} className="text-xs">
+                  Retry
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}
