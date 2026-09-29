@@ -692,58 +692,74 @@ async def scrape(url: str):
                 try:
                     clean_url = url.split("?")[0].rstrip("/")
                     clean_url = re.sub(r'/(comments|reviews|support)$', '', clean_url)
-                    comments_url = f"{clean_url}/comments"
                     comments_page = await context.new_page()
                     await Stealth().apply_stealth_async(comments_page)
-                    await comments_page.goto(comments_url, wait_until='domcontentloaded', timeout=20000)
-                    await comments_page.wait_for_timeout(1000)
                     
-                    comments_data = await comments_page.evaluate('''() => {
-                        const list = [];
-                        let totalCount = null;
-                        
-                        // Extract total comments count from tab badge or heading
-                        const links = Array.from(document.querySelectorAll('a[href*="/comments"], .item-navigation a, [data-view="commentsCount"]'));
-                        for (const l of links) {
-                            const t = l.innerText || '';
-                            const m = t.match(/comments?\s*\(?([0-9,]+)\)?/i) || t.match(/\(?([0-9,]+)\)?\s*comments?/i);
-                            if (m) {
-                                totalCount = parseInt(m[1].replace(/,/g, ''), 10);
-                                break;
-                            }
-                        }
-                        if (!totalCount) {
-                            const heading = document.querySelector('h1, h2, .page-title, .item-header')?.innerText || '';
-                            const m = heading.match(/([0-9,]+)\s+comments?/i);
-                            if (m) totalCount = parseInt(m[1].replace(/,/g, ''), 10);
-                        }
-                        
-                        document.querySelectorAll('.comment__item, .js-comment, [class*="comment__item"], .comment, [class*="comment-item"], article.comment').forEach((c, idx) => {
-                            if (idx >= 80) return;
-                            const author = c.querySelector('a[href^="/user/"], .comment__author, [class*="author"], a.user-info')?.innerText?.trim() || 'Customer';
-                            const text = c.querySelector('.comment__body, .js-comment__body, .t-preformatted, .comment__content, [class*="comment_body"], .user-html')?.innerText?.trim() || '';
-                            const date = c.querySelector('.comment__date, time, [class*="date"]')?.innerText?.trim() || 'Recently';
-                            const commentUrl = c.querySelector('a.comment__date, a[href*="#comment"], a[href*="/comments/"]')?.href || null;
-                            if (text.length > 10) {
-                                list.push({
-                                    author_name: author,
-                                    comment_text: text.slice(0, 1000),
-                                    comment_date: date,
-                                    comment_url: commentUrl,
-                                    rating: null
+                    all_scraped_comments = []
+                    extracted_total_count = None
+
+                    for page_idx in range(1, 15):
+                        comments_url = f"{clean_url}/comments?page={page_idx}" if page_idx > 1 else f"{clean_url}/comments"
+                        try:
+                            await comments_page.goto(comments_url, wait_until='domcontentloaded', timeout=18000)
+                            await comments_page.wait_for_timeout(700)
+                            
+                            comments_data = await comments_page.evaluate('''() => {
+                                const list = [];
+                                let totalCount = null;
+                                
+                                // Extract total comments count from tab badge or heading
+                                const links = Array.from(document.querySelectorAll('a[href*="/comments"], .item-navigation a, [data-view="commentsCount"]'));
+                                for (const l of links) {
+                                    const t = l.innerText || '';
+                                    const m = t.match(/comments?\\s*\\(?([0-9,]+)\\)?/i) || t.match(/\\(?([0-9,]+)\\)?\\s*comments?/i);
+                                    if (m) {
+                                        totalCount = parseInt(m[1].replace(/,/g, ''), 10);
+                                        break;
+                                    }
+                                }
+                                if (!totalCount) {
+                                    const heading = document.querySelector('h1, h2, .page-title, .item-header')?.innerText || '';
+                                    const m = heading.match(/([0-9,]+)\\s+comments?/i);
+                                    if (m) totalCount = parseInt(m[1].replace(/,/g, ''), 10);
+                                }
+                                
+                                document.querySelectorAll('.comment__item, .js-comment, [class*="comment__item"], .comment, [class*="comment-item"], article.comment').forEach((c) => {
+                                    const author = c.querySelector('a[href^="/user/"], .comment__author, [class*="author"], a.user-info')?.innerText?.trim() || 'Customer';
+                                    const text = c.querySelector('.comment__body, .js-comment__body, .t-preformatted, .comment__content, [class*="comment_body"], .user-html')?.innerText?.trim() || '';
+                                    const date = c.querySelector('.comment__date, time, [class*="date"]')?.innerText?.trim() || 'Recently';
+                                    const commentUrl = c.querySelector('a.comment__date, a[href*="#comment"], a[href*="/comments/"]')?.href || null;
+                                    if (text.length > 10) {
+                                        list.push({
+                                            author_name: author,
+                                            comment_text: text.slice(0, 1000),
+                                            comment_date: date,
+                                            comment_url: commentUrl,
+                                            rating: null
+                                        });
+                                    }
                                 });
-                            }
-                        });
-                        return { list, totalCount };
-                    }''')
+                                return { list, totalCount };
+                            }''')
+                            
+                            if comments_data:
+                                if comments_data.get("totalCount") and not extracted_total_count:
+                                    extracted_total_count = comments_data["totalCount"]
+                                page_list = comments_data.get("list") or []
+                                if len(page_list) == 0:
+                                    break
+                                all_scraped_comments.extend(page_list)
+                                if len(all_scraped_comments) >= 300:
+                                    break
+                        except Exception:
+                            break
                     
-                    if comments_data:
-                        if comments_data.get("list") and len(comments_data["list"]) > 0:
-                            result["comments"] = comments_data["list"]
-                        if comments_data.get("totalCount"):
-                            result["envatoSales"]["comment_count"] = comments_data["totalCount"]
-                        elif len(result["comments"]) > 0 and result["envatoSales"]["comment_count"] is None:
-                            result["envatoSales"]["comment_count"] = len(result["comments"])
+                    if len(all_scraped_comments) > 0:
+                        result["comments"] = all_scraped_comments
+                    if extracted_total_count:
+                        result["envatoSales"]["comment_count"] = extracted_total_count
+                    elif len(result["comments"]) > 0 and result["envatoSales"]["comment_count"] is None:
+                        result["envatoSales"]["comment_count"] = len(result["comments"])
                             
                     await comments_page.close()
                 except Exception:
