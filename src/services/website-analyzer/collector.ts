@@ -1294,13 +1294,21 @@ export async function fetchProductPublicComments(url: string): Promise<Array<{
     console.warn(`Could not query database for synced threads (${url}):`, dbErr)
   }
 
-  // Fallback 2: Check existing comparison analyses for cached comments on this competitor URL
+  // Fallback 2: Check existing comparison analyses for cached comments on this product or competitor URL
   try {
+    const itemId = extractEnvatoItemId(url)
     const existing = await prisma.comparisonAnalysis.findFirst({
       where: {
         OR: [
+          { myUrl: { contains: url } },
           { competitorUrl: { contains: url } },
           { competitorUrls: { has: url } },
+          ...(itemId
+            ? [
+                { myUrl: { contains: itemId } },
+                { competitorUrl: { contains: itemId } },
+              ]
+            : []),
         ],
       },
       select: { commentsAnalysis: true },
@@ -1308,9 +1316,14 @@ export async function fetchProductPublicComments(url: string): Promise<Array<{
     })
     if (existing?.commentsAnalysis) {
       const ca = existing.commentsAnalysis as any
-      const matchingComments = ca.all_comments?.filter(
-        (c: any) => c.product_url === url || (url.includes(c.product_url) && c.product_url?.length > 10)
-      )
+      const matchingComments = ca.all_comments?.filter((c: any) => {
+        if (!c.product_url && !c.product_name) return false
+        const cUrl = (c.product_url || '').toLowerCase()
+        const targetUrl = url.toLowerCase()
+        if (cUrl === targetUrl || targetUrl.includes(cUrl) || cUrl.includes(targetUrl)) return true
+        if (itemId && cUrl.includes(itemId)) return true
+        return false
+      })
       if (matchingComments && matchingComments.length > 0) {
         return matchingComments.map((c: any) => ({
           author_name: c.author_name || 'Public Member',

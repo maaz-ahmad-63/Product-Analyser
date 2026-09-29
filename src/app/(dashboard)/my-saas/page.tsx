@@ -194,6 +194,7 @@ export default function MySaaSPage() {
   const competitors: any[] = (currentProjectData?.competitors_data && currentProjectData.competitors_data.length > 0)
     ? currentProjectData.competitors_data
     : (competitorRows.length > 0 ? competitorRows : (currentProjectData?.competitor_product ? [currentProjectData.competitor_product] : []))
+  const allCompetitorList: any[] = competitors.length > 0 ? competitors : competitorRows
   const seoData = currentProjectData?.seo_analysis || {}
   const mySalesAnalysis = currentProjectData?.my_sales_analysis || currentProjectData?.multi_sales_comparison?.my_sales || null
   const activityComparisons: any[] = currentProjectData?.multi_sales_comparison?.activity_comparisons || currentProjectData?.sales_comparison?.activity_comparisons || []
@@ -225,13 +226,54 @@ export default function MySaaSPage() {
   // ── Helper: convert a PublicComment → unified timeline event ──
   const commentToEvent = (c: any, isTarget: boolean, pName: string, pUrl: string, idx: number, prefix: string) => {
     const isReview = c.rating != null
+    // Safely parse timestamp to avoid NaN in sorting
+    let timestamp = ''
+    let formattedDate = 'Recent comment'
+
+    if (c.collected_at) {
+      const d = new Date(c.collected_at)
+      if (!isNaN(d.getTime())) {
+        timestamp = d.toISOString()
+        formattedDate = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+      }
+    }
+
+    if (c.comment_date) {
+      const rawDateStr = String(c.comment_date).trim()
+      const relMatch = rawDateStr.match(/(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago/i)
+      if (relMatch) {
+        const num = parseInt(relMatch[1], 10)
+        const unit = relMatch[2].toLowerCase()
+        const targetDate = new Date()
+        if (unit.startsWith('minute')) targetDate.setMinutes(targetDate.getMinutes() - num)
+        else if (unit.startsWith('hour')) targetDate.setHours(targetDate.getHours() - num)
+        else if (unit.startsWith('day')) targetDate.setDate(targetDate.getDate() - num)
+        else if (unit.startsWith('week')) targetDate.setDate(targetDate.getDate() - num * 7)
+        else if (unit.startsWith('month')) targetDate.setMonth(targetDate.getMonth() - num)
+        else if (unit.startsWith('year')) targetDate.setFullYear(targetDate.getFullYear() - num)
+        timestamp = targetDate.toISOString()
+        formattedDate = rawDateStr
+      } else {
+        const d = new Date(rawDateStr)
+        if (!isNaN(d.getTime())) {
+          timestamp = d.toISOString()
+          formattedDate = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+        } else if (!timestamp) {
+          timestamp = new Date().toISOString()
+          formattedDate = rawDateStr
+        }
+      }
+    }
+
+    if (!timestamp) {
+      timestamp = new Date().toISOString()
+    }
+
     return {
       id: c.id || `${prefix}-${idx}`,
       type: isReview ? 'review' : 'comment',
-      timestamp: c.collected_at || c.comment_date || '',
-      formattedDate: c.comment_date
-        ? new Date(c.comment_date).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-        : (c.collected_at ? new Date(c.collected_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unknown date'),
+      timestamp,
+      formattedDate,
       relativeTime: '',
       productName: pName,
       isTarget,
@@ -268,7 +310,10 @@ export default function MySaaSPage() {
     const myComments = allComments
       .filter((c: any) => {
         const u = (c.product_url || '').toLowerCase()
-        return u === targetUrl.toLowerCase() || (c.product_name || '').toLowerCase() === targetName.toLowerCase()
+        const tUrl = targetUrl.toLowerCase()
+        const pName = (c.product_name || '').toLowerCase()
+        const tName = targetName.toLowerCase()
+        return (tUrl && (u === tUrl || tUrl.includes(u) || u.includes(tUrl))) || (pName.includes('rideon') || (tName && pName.includes(tName.slice(0, 15))))
       })
       .map((c: any, idx: number) => commentToEvent(c, true, targetName, targetUrl, idx, 'target-c'))
     return [...sales, ...myComments].sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
@@ -277,8 +322,7 @@ export default function MySaaSPage() {
 
   // ── Competitor unified events ──
   const competitorEvents = React.useMemo(() => {
-    const compList = competitorRows.length > 0 ? competitorRows : competitors
-    return compList.flatMap((c: any, cIdx: number) => {
+    return allCompetitorList.flatMap((c: any, cIdx: number) => {
       const compRow = competitorRows.find((r: any) => r.url === c?.url || r.productName === c?.productName) || c
       const cTimeline = compRow.activity_timeline || compRow.salesAnalysis?.sales_activity_timeline || c.activity_timeline || c.salesAnalysis?.sales_activity_timeline
       const sales = (cTimeline?.events || []).map((ev: any, idx: number) => ({
@@ -293,13 +337,16 @@ export default function MySaaSPage() {
         .filter((cm: any) => {
           if (cm.is_target === true) return false
           const u = (cm.product_url || '').toLowerCase()
-          return (c.url && u === (c.url || '').toLowerCase()) || (cm.product_name || '').toLowerCase() === (c.productName || '').toLowerCase()
+          const cUrl = (c.url || '').toLowerCase()
+          const pName = (cm.product_name || '').toLowerCase()
+          const cName = (c.productName || '').toLowerCase()
+          return (cUrl && (u === cUrl || u.includes(cUrl) || cUrl.includes(u))) || (cName && (pName === cName || pName.includes(cName.slice(0, 15)) || cName.includes(pName.slice(0, 15))))
         })
         .map((cm: any, idx: number) => commentToEvent(cm, false, c.productName || `Competitor ${cIdx + 1}`, c.url, idx, `comp-${cIdx}-c`))
       return [...sales, ...compComments]
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [competitorRows, competitors, allComments])
+  }, [allCompetitorList, competitorRows, allComments])
 
   // ── All events sorted newest-first ──
   const allMarketplaceEvents = React.useMemo(() => {
@@ -311,10 +358,10 @@ export default function MySaaSPage() {
   // ── Selected competitor ──
   const selectedCompetitor = React.useMemo(() => {
     if (selectedProductKey === 'target' || selectedProductKey === 'all') return null
-    return competitorRows.find(
+    return allCompetitorList.find(
       (r: any) => r.url === selectedProductKey || r.productName === selectedProductKey
     ) || null
-  }, [selectedProductKey, competitorRows])
+  }, [selectedProductKey, allCompetitorList])
 
   // ── Active timeline for the card (sales-only events for the telemetry metrics) ──
   const activeTimeline = React.useMemo(() => {
@@ -351,9 +398,15 @@ export default function MySaaSPage() {
     if (selectedProductKey === 'target') {
       list = targetEvents
     } else if (selectedCompetitor) {
-      list = allMarketplaceEvents.filter(
-        (e: any) => e.url === selectedCompetitor.url || e.productName === selectedCompetitor.productName
-      )
+      const cUrl = (selectedCompetitor.url || '').toLowerCase()
+      const cName = (selectedCompetitor.productName || '').toLowerCase()
+      list = allMarketplaceEvents.filter((e: any) => {
+        const eUrl = (e.url || '').toLowerCase()
+        const eName = (e.productName || '').toLowerCase()
+        if (cUrl && (eUrl === cUrl || eUrl.includes(cUrl) || cUrl.includes(eUrl))) return true
+        if (cName && (eName === cName || eName.includes(cName.slice(0, 15)) || cName.includes(eName.slice(0, 15)))) return true
+        return false
+      })
     }
     if (eventTypeFilter !== 'all') {
       list = list.filter((e: any) => e.type === eventTypeFilter)
@@ -994,7 +1047,7 @@ export default function MySaaSPage() {
             </CardTitle>
             <CardDescription className="text-xs text-muted-foreground">
               {isShowingAllMarket
-                ? `Combined verified sales timeline across ${1 + competitorRows.length} monitored marketplace products (${allMarketplaceEvents.length} events).`
+                ? `Combined verified sales timeline across ${1 + allCompetitorList.length} monitored marketplace products (${allMarketplaceEvents.length} events).`
                 : isSelectedCompetitor
                 ? `Showing telemetry for competitor ${activeProductName}. Click any row in the comparison table below to change.`
                 : 'Deterministic observation intervals and momentum between verified sales increases.'}
@@ -1303,14 +1356,21 @@ export default function MySaaSPage() {
               >
                 <span>{targetName.split('–')[0].split('-')[0].trim()} (You)</span>
                 <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground font-mono">
-                  {salesTimeline?.total_observed_events || 0}
+                  {targetEvents.length}
                 </span>
               </button>
-              {competitorRows.map((c: any, cIdx: number) => {
-                const cTimeline = c.activity_timeline || c.salesAnalysis?.sales_activity_timeline
-                const cIncreases = cTimeline?.total_observed_events ?? 0
+              {allCompetitorList.map((c: any, cIdx: number) => {
                 const isSelected = selectedProductKey === (c.url || c.productName)
                 const shortName = (c.productName || `Competitor ${cIdx + 1}`).split('–')[0].split('-')[0].trim()
+                const cUrl = (c.url || '').toLowerCase()
+                const cName = (c.productName || '').toLowerCase()
+                const compEventsCount = allMarketplaceEvents.filter((e: any) => {
+                  const eUrl = (e.url || '').toLowerCase()
+                  const eName = (e.productName || '').toLowerCase()
+                  if (cUrl && (eUrl === cUrl || eUrl.includes(cUrl) || cUrl.includes(eUrl))) return true
+                  if (cName && (eName === cName || eName.includes(cName.slice(0, 15)) || cName.includes(eName.slice(0, 15)))) return true
+                  return false
+                }).length
 
                 return (
                   <button
@@ -1324,7 +1384,7 @@ export default function MySaaSPage() {
                   >
                     <span>{shortName}</span>
                     <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground font-mono">
-                      {cIncreases}
+                      {compEventsCount}
                     </span>
                   </button>
                 )
@@ -1608,12 +1668,21 @@ export default function MySaaSPage() {
                 {[
                   { key: 'all', label: `All Products (${allMarketplaceEvents.length})` },
                   { key: 'target', label: `${targetName.split('–')[0].trim()} · You (${targetEvents.length})` },
-                  ...competitorRows.map((c: any) => ({
-                    key: c.url || c.productName,
-                    label: `${(c.productName || 'Competitor').split('–')[0].trim()} (${
-                      allMarketplaceEvents.filter((e: any) => e.url === c.url || e.productName === c.productName).length
-                    })`,
-                  }))
+                  ...allCompetitorList.map((c: any) => {
+                    const cUrl = (c.url || '').toLowerCase()
+                    const cName = (c.productName || '').toLowerCase()
+                    const count = allMarketplaceEvents.filter((e: any) => {
+                      const eUrl = (e.url || '').toLowerCase()
+                      const eName = (e.productName || '').toLowerCase()
+                      if (cUrl && (eUrl === cUrl || eUrl.includes(cUrl) || cUrl.includes(eUrl))) return true
+                      if (cName && (eName === cName || eName.includes(cName.slice(0, 15)) || cName.includes(eName.slice(0, 15)))) return true
+                      return false
+                    }).length
+                    return {
+                      key: c.url || c.productName,
+                      label: `${(c.productName || 'Competitor').split('–')[0].split('-')[0].trim()} (${count})`,
+                    }
+                  }),
                 ].map((f) => (
                   <button
                     key={f.key}
